@@ -23,7 +23,14 @@ ENV NODE_ENV=production
 ENV PORT=4007
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends openssl ca-certificates \
+  && apt-get install -y --no-install-recommends \
+    openssl ca-certificates \
+    curl \
+    wget \
+    iputils-ping \
+    netcat-openbsd \
+    dnsutils \
+    procps \
   && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /app/node_modules ./node_modules
