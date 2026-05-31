@@ -92,6 +92,7 @@ export class K8sService {
         }
       },
       spec: {
+        ingressClassName: 'traefik-k3s',
         rules: [
           {
             http: {
