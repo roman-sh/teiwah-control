@@ -17,6 +17,7 @@ export class K8sService {
 
   async createSessionWorker(sessionId: string) {
     const namespace = 'default'
+    const workerPort = Number(env.SESSION_WORKER_PORT)
 
     // 1. Create Deployment
     const deployment: k8s.V1Deployment = {
@@ -37,9 +38,9 @@ export class K8sService {
             containers: [
               {
                 name: 'wa-session',
-                image: 'teiwah-session-app:local',
-                imagePullPolicy: 'Never', // Use local image
-                ports: [{ containerPort: 5335 }],
+                image: env.SESSION_WORKER_IMAGE,
+                imagePullPolicy: 'IfNotPresent',
+                ports: [{ containerPort: workerPort }],
                 env: [
                   { name: 'SESSION_ID', value: sessionId },
                   {
@@ -47,7 +48,7 @@ export class K8sService {
                     value: env.CONTROL_APP_BASE_URL
                   },
                   { name: 'NODE_ENV', value: 'production' },
-                  { name: 'PORT', value: '5335' }
+                  { name: 'PORT', value: env.SESSION_WORKER_PORT }
                 ],
                 resources: {
                   requests: {
@@ -75,8 +76,8 @@ export class K8sService {
         selector: { app: sessionId },
         ports: [
           {
-            port: 5335,
-            targetPort: 5335
+            port: workerPort,
+            targetPort: workerPort
           }
         ],
         type: 'ClusterIP' // Internal routing only
@@ -103,7 +104,7 @@ export class K8sService {
                   backend: {
                     service: {
                       name: sessionId,
-                      port: { number: 5335 }
+                      port: { number: workerPort }
                     }
                   }
                 }
