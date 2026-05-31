@@ -35,6 +35,7 @@ export class K8sService {
             labels: { app: sessionId }
           },
           spec: {
+            imagePullSecrets: [{ name: env.IMAGE_PULL_SECRET }],
             containers: [
               {
                 name: 'wa-session',
