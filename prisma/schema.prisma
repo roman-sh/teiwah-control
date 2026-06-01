@@ -7,12 +7,13 @@ datasource db {
 }
 
 model Session {
-  id          String   @id
-  userId      String
-  phoneNumber String?
-  webhookUrl  String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id            String   @id
+  userId        String
+  phoneNumber   String?
+  webhookUrl    String?
+  apiKeyMasked  String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
   @@map("sessions")
 }

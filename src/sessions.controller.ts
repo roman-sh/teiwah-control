@@ -18,6 +18,7 @@ import {
 } from 'unique-names-generator'
 import { randomBytes } from 'crypto'
 import { K8sService } from './k8s.service'
+import { ZuploService } from './zuplo.service'
 import { DbService } from './db.service'
 import { UserIdHeaderGuard } from './user-id-header.guard'
 
@@ -26,6 +27,7 @@ import { UserIdHeaderGuard } from './user-id-header.guard'
 export class SessionsController {
   constructor(
     private readonly k8sService: K8sService,
+    private readonly zuploService: ZuploService,
     private readonly dbService: DbService
   ) {}
 
@@ -42,6 +44,7 @@ export class SessionsController {
         sessionId: session.id,
         phoneNumber: session.phoneNumber,
         webhookUrl: session.webhookUrl,
+        apiKeyMasked: session.apiKeyMasked,
         createdAt: session.createdAt
       }))
     } catch (error) {
@@ -68,16 +71,23 @@ export class SessionsController {
       // and we never reach the DB step, preventing "ghost" records in the DB.
       await this.k8sService.createSessionWorker(sessionId)
 
-      // 2. Save to Prisma (PostgreSQL) only after K8s provisioning succeeds
+      // 2. Zuplo Consumer (name = sessionId) + API key for POST /messages
+      const { apiKey, apiKeyMasked } =
+        await this.zuploService.createSessionConsumer(sessionId)
+
+      // 3. Save to Prisma (PostgreSQL) only after k8s + Zuplo succeed
       await this.dbService.session.create({
         data: {
           id: sessionId,
-          userId
+          userId,
+          apiKeyMasked
         }
       })
 
       return {
         sessionId,
+        apiKey,
+        apiKeyMasked,
         status: 'provisioning',
         message: 'Session is spinning up. Connect to the events endpoint soon.'
       }
@@ -125,10 +135,12 @@ export class SessionsController {
   @Delete(':id')
   async deleteSession(@Param('id') id: string) {
     try {
-      // 1. Fire off K8s deletion in the background (fire-and-forget)
-      // We don't await this so the API responds instantly
+      // 1. Fire off K8s + Zuplo deletion in the background (fire-and-forget)
       this.k8sService.deleteSessionWorker(id).catch((error) => {
         log.error(error, `Background K8s deletion failed for ${id}`)
+      })
+      this.zuploService.deleteSessionConsumer(id).catch((error) => {
+        log.error(error, `Background Zuplo deletion failed for ${id}`)
       })
 
       // 2. Hard delete the DB record
