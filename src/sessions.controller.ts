@@ -34,7 +34,8 @@ export class SessionsController {
     try {
       const sessions = await this.dbService.session.findMany({
         where: { userId },
-        orderBy: { createdAt: 'desc' }
+        // Oldest first — dashboard shows sessions in creation order.
+        orderBy: { createdAt: 'asc' }
       })
 
       return sessions.map((session) => ({
