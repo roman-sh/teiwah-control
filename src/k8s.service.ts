@@ -51,14 +51,15 @@ export class K8sService {
                   { name: 'NODE_ENV', value: 'production' },
                   { name: 'PORT', value: env.SESSION_WORKER_PORT }
                 ],
+                // ~20 sessions per ~4 GiB worker (request = limit). Tune after PVC + real usage (kubectl top).
                 resources: {
                   requests: {
-                    memory: '64Mi',
+                    memory: '164Mi',
                     cpu: '50m'
                   },
                   limits: {
-                    memory: '256Mi',
-                    cpu: '200m'
+                    memory: '164Mi',
+                    cpu: '100m'
                   }
                 }
               }
