@@ -31,6 +31,12 @@ export class SessionsController {
     private readonly dbService: DbService
   ) {}
 
+  /**
+   * GET /sessions
+   *
+   * List sessions for the authenticated user (x-user-id header from Zuplo).
+   * Returns inventory only — no worker SSE or live status.
+   */
   @Get()
   async getUserSessions(@Headers('x-user-id') userId: string) {
     try {
@@ -56,6 +62,12 @@ export class SessionsController {
     }
   }
 
+  /**
+   * POST /sessions
+   *
+   * Provision a new session: k8s worker pod → Zuplo consumer + API key → DB row.
+   * Returns full apiKey once; apiKeyMasked is persisted for later list views.
+   */
   @Post()
   async createSession(@Headers('x-user-id') userId: string) {
     const userMascot = uniqueNamesGenerator({
@@ -100,6 +112,32 @@ export class SessionsController {
     }
   }
 
+  /**
+   * GET /sessions/:id/api-key
+   *
+   * Reveal the full Zuplo API key for a session (dashboard "Show").
+   * Fetched from Zuplo on demand — not stored in DB.
+   */
+  @Get(':id/api-key')
+  async getSessionApiKey(@Param('id') id: string) {
+    try {
+      const apiKey = await this.zuploService.getSessionConsumerApiKey(id)
+      return { apiKey }
+    } catch (error) {
+      if (error instanceof HttpException) throw error
+      log.error(error, `Failed to fetch API key for session ${id}`)
+      throw new HttpException(
+        'Failed to fetch API key',
+        HttpStatus.INTERNAL_SERVER_ERROR
+      )
+    }
+  }
+
+  /**
+   * PATCH /sessions/:id/webhook
+   *
+   * Save the inbound webhook URL for a session (WhatsApp → Teiwah → user URL).
+   */
   @Patch(':id/webhook')
   async updateWebhook(
     @Param('id') id: string,
@@ -132,6 +170,12 @@ export class SessionsController {
     }
   }
 
+  /**
+   * DELETE /sessions/:id
+   *
+   * Tear down a session: delete DB row immediately; k8s pod + Zuplo consumer
+   * removed in the background (fire-and-forget).
+   */
   @Delete(':id')
   async deleteSession(@Param('id') id: string) {
     try {

@@ -35,9 +35,16 @@ const CONSUMER_CREATE_URL = `${CONSUMERS_URL}?with-api-key=true&key-format=visib
 /** DELETE — consumerName path segment is Consumer.name (= sessionId), not the internal csmr_ id. */
 const CONSUMER_DELETE_URL = `${CONSUMERS_URL}/{sessionId}`
 
+/** GET — list keys for a consumer (key-format=visible returns full secret). */
+const CONSUMER_KEYS_URL = `${CONSUMERS_URL}/{sessionId}/keys?key-format=visible&limit=1&offset=0`
+
 type ZuploConsumer = {
   name: string
   apiKeys?: Array<{ key?: string }>
+}
+
+type ZuploKeysResponse = {
+  data: Array<{ key?: string }>
 }
 
 @Injectable()
@@ -83,6 +90,42 @@ export class ZuploService {
   }
 
   /**
+   * GET /consumers/{consumerName}/keys?key-format=visible
+   */
+  async getSessionConsumerApiKey(sessionId: string): Promise<string> {
+    const url = CONSUMER_KEYS_URL.replace(
+      '{sessionId}',
+      encodeURIComponent(sessionId)
+    )
+
+    const response = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${env.ZUPLO_API_KEY}`
+      }
+    })
+
+    if (response.status === 404) {
+      throw new Error(`Zuplo consumer ${sessionId} not found`)
+    }
+
+    if (!response.ok) {
+      const body = await response.text()
+      throw new Error(
+        `Zuplo list keys failed (${response.status}): ${body}`
+      )
+    }
+
+    const { data } = (await response.json()) as ZuploKeysResponse
+    const apiKey = data[0]?.key
+
+    if (!apiKey) {
+      throw new Error(`Zuplo consumer ${sessionId} has no API keys`)
+    }
+
+    return apiKey
+  }
+
+  /**
    * DELETE /consumers/{consumerName}
    *
    * consumerName is the Consumer's `name` field (= our sessionId), not the internal csmr_ id.
@@ -117,10 +160,11 @@ export class ZuploService {
   }
 }
 
-/** Display-safe mask: first 8 + ... + last 4 (full secret never stored). */
+// -----------------------------------------------------------------------------
+// HELPERS
+// -----------------------------------------------------------------------------
+
+/** Display-safe mask: last 8 chars only (full secret never stored). */
 function maskApiKey(key: string): string {
-  if (key.length <= 12) {
-    return key
-  }
-  return `${key.slice(0, 8)}...${key.slice(-4)}`
+  return key.slice(-8)
 }
