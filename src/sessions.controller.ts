@@ -96,6 +96,8 @@ export class SessionsController {
         }
       })
 
+      this.k8sService.startProvisioningWatch(sessionId)
+
       return {
         sessionId,
         apiKey,

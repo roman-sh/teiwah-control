@@ -7,6 +7,7 @@ export const envSchema = z.object({
   SESSION_WORKER_IMAGE: z.string(),
   SESSION_WORKER_PORT: z.string(),
   IMAGE_PULL_SECRET: z.string(),
+  K8S_NAMESPACE: z.string(),
   ZUPLO_API_KEY: z.string(),
   ZUPLO_ACCOUNT: z.string(),
   ZUPLO_KEY_BUCKET: z.string(),

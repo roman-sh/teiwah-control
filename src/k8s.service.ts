@@ -1,8 +1,10 @@
 import { Injectable } from '@nestjs/common'
 import * as k8s from '@kubernetes/client-node'
+import { watchSessionProvisioning } from './provision-watch'
 
 @Injectable()
 export class K8sService {
+  private readonly kubeConfig: k8s.KubeConfig
   private k8sApi: k8s.AppsV1Api
   private coreApi: k8s.CoreV1Api
   private networkingApi: k8s.NetworkingV1Api
@@ -10,13 +12,24 @@ export class K8sService {
   constructor() {
     const kc = new k8s.KubeConfig()
     kc.loadFromDefault() // Loads from ~/.kube/config
+    this.kubeConfig = kc
     this.k8sApi = kc.makeApiClient(k8s.AppsV1Api)
     this.coreApi = kc.makeApiClient(k8s.CoreV1Api)
     this.networkingApi = kc.makeApiClient(k8s.NetworkingV1Api)
   }
 
+  /**
+   * Bounded pod + deployment watch after create — logs provisionState transitions.
+   * Does not block callers; safe to fire-and-forget from POST /sessions.
+   */
+  startProvisioningWatch(sessionId: string): void {
+    watchSessionProvisioning(this.kubeConfig, sessionId).catch((error) => {
+      log.error(error, `Provision watch failed for session ${sessionId}`)
+    })
+  }
+
   async createSessionWorker(sessionId: string) {
-    const namespace = 'default'
+    const namespace = env.K8S_NAMESPACE
     const workerPort = Number(env.SESSION_WORKER_PORT)
 
     // 1. Create Deployment
@@ -91,7 +104,7 @@ export class K8sService {
       metadata: {
         name: sessionId,
         annotations: {
-          'traefik.ingress.kubernetes.io/router.middlewares': `default-${sessionId}-strip@kubernetescrd`
+          'traefik.ingress.kubernetes.io/router.middlewares': `${namespace}-${sessionId}-strip@kubernetescrd`
         }
       },
       spec: {
@@ -169,7 +182,7 @@ export class K8sService {
   }
 
   async deleteSessionWorker(sessionId: string) {
-    const namespace = 'default'
+    const namespace = env.K8S_NAMESPACE
 
     try {
       log.info(`Deleting Ingress for session ${sessionId}...`)
