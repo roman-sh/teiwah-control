@@ -64,14 +64,15 @@ export class K8sService {
                   { name: 'NODE_ENV', value: 'production' },
                   { name: 'PORT', value: env.SESSION_WORKER_PORT }
                 ],
-                // ~20 sessions per ~4 GiB worker (request = limit). Tune after PVC + real usage (kubectl top).
+                // Burstable: reserve 160Mi (density ~22/4GiB node), allow bursts to 224Mi before
+                // OOMKill. Tune request to observed P75 once real session usage is measured.
                 resources: {
                   requests: {
-                    memory: '164Mi',
+                    memory: '160Mi',
                     cpu: '50m'
                   },
                   limits: {
-                    memory: '164Mi',
+                    memory: '224Mi',
                     cpu: '100m'
                   }
                 }
