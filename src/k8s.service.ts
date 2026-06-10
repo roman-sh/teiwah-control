@@ -63,7 +63,9 @@ export class K8sService {
               {
                 name: 'wa-session',
                 image: env.SESSION_WORKER_IMAGE,
-                imagePullPolicy: 'IfNotPresent',
+                // Always: CI overwrites the :amd64 tag; IfNotPresent leaves a stale
+                // digest cached on the node and rollout restart won't pick up new builds.
+                imagePullPolicy: 'Always',
                 ports: [{ containerPort: workerPort }],
                 env: [
                   { name: 'SESSION_ID', value: sessionId },
