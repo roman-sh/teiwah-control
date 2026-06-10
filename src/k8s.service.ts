@@ -2,6 +2,13 @@ import { Injectable } from '@nestjs/common'
 import * as k8s from '@kubernetes/client-node'
 import { watchSessionProvisioning } from './provision-watch'
 
+/**
+ * Where per-session durable storage is mounted in the worker pod.
+ * Injected into the pod as SESSION_STORAGE_PATH and reused as the volume
+ * mountPath so the mount location and the worker's env value cannot diverge.
+ */
+const SESSION_STORAGE_PATH = '/data/teiwah'
+
 @Injectable()
 export class K8sService {
   private readonly kubeConfig: k8s.KubeConfig
@@ -40,6 +47,9 @@ export class K8sService {
       },
       spec: {
         replicas: 1,
+        // RWO PVC: a RollingUpdate would deadlock (the new pod cannot mount the
+        // volume while the old pod still holds it). Recreate stops the old pod first.
+        strategy: { type: 'Recreate' },
         selector: {
           matchLabels: { app: sessionId }
         },
@@ -62,7 +72,11 @@ export class K8sService {
                     value: env.CONTROL_APP_BASE_URL
                   },
                   { name: 'NODE_ENV', value: 'production' },
-                  { name: 'PORT', value: env.SESSION_WORKER_PORT }
+                  { name: 'PORT', value: env.SESSION_WORKER_PORT },
+                  {
+                    name: 'SESSION_STORAGE_PATH',
+                    value: SESSION_STORAGE_PATH
+                  }
                 ],
                 // Burstable: reserve 160Mi (density ~22/4GiB node), allow bursts to 224Mi before
                 // OOMKill. Tune request to observed P75 once real session usage is measured.
@@ -75,7 +89,16 @@ export class K8sService {
                     memory: '224Mi',
                     cpu: '100m'
                   }
-                }
+                },
+                volumeMounts: [
+                  { name: 'session-storage', mountPath: SESSION_STORAGE_PATH }
+                ]
+              }
+            ],
+            volumes: [
+              {
+                name: 'session-storage',
+                persistentVolumeClaim: { claimName: `${sessionId}-storage` }
               }
             ]
           }
@@ -83,7 +106,18 @@ export class K8sService {
       }
     }
 
-    // 2. Create Service
+    // 2. Create PersistentVolumeClaim (node-local, k3s local-path) for durable
+    // Baileys auth state. Node-pinned: survives in-place restarts, not node moves.
+    const pvc: k8s.V1PersistentVolumeClaim = {
+      metadata: { name: `${sessionId}-storage` },
+      spec: {
+        accessModes: ['ReadWriteOnce'],
+        storageClassName: 'local-path',
+        resources: { requests: { storage: '1Gi' } }
+      }
+    }
+
+    // 3. Create Service
     const service: k8s.V1Service = {
       metadata: {
         name: sessionId
@@ -100,7 +134,7 @@ export class K8sService {
       }
     }
 
-    // 3. Create Ingress with Traefik Rewrite Middleware
+    // 4. Create Ingress with Traefik Rewrite Middleware
     const ingress: k8s.V1Ingress = {
       metadata: {
         name: sessionId,
@@ -131,7 +165,7 @@ export class K8sService {
       }
     }
 
-    // 4. Create Traefik Middleware (StripPrefixRegex)
+    // 5. Create Traefik Middleware (StripPrefixRegex)
     const middleware = {
       apiVersion: 'traefik.io/v1alpha1',
       kind: 'Middleware',
@@ -147,6 +181,12 @@ export class K8sService {
     }
 
     try {
+      log.info(`Creating PersistentVolumeClaim for session ${sessionId}...`)
+      await this.coreApi.createNamespacedPersistentVolumeClaim({
+        namespace,
+        body: pvc
+      })
+
       log.info(`Creating Deployment for session ${sessionId}...`)
       await this.k8sApi.createNamespacedDeployment({
         namespace,
@@ -233,6 +273,19 @@ export class K8sService {
       })
     } catch (e: unknown) {
       log.warn(e, `Failed to delete Deployment ${sessionId} (might not exist)`)
+    }
+
+    try {
+      log.info(`Deleting PersistentVolumeClaim for session ${sessionId}...`)
+      await this.coreApi.deleteNamespacedPersistentVolumeClaim({
+        name: `${sessionId}-storage`,
+        namespace
+      })
+    } catch (e: unknown) {
+      log.warn(
+        e,
+        `Failed to delete PVC ${sessionId}-storage (might not exist)`
+      )
     }
   }
 }
