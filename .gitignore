@@ -46,6 +46,9 @@ lerna-debug.log*
 .env.production.local
 .env.local
 
+# Cloud k3s credentials (local dev only — scp from server, see .env.example)
+/k3s-cloud.yaml
+
 # temp directory
 .temp
 .tmp

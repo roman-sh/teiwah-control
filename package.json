@@ -9,9 +9,16 @@
     "build": "nest build",
     "format": "prettier --write \"src/**/*.ts\"",
     "start": "nest start --env-file .env",
+    "//start:dev": "control only — no cloudflared",
     "start:dev": "nest start --watch --env-file .env",
+    "//predev": "cloudflared in background; npm runs this automatically before dev",
+    "predev": "bash -c 'set -a && source .env && set +a && cloudflared tunnel run --token \"$CLOUDFLARED_TUNNEL_TOKEN\" &'",
+    "//dev": "tunnel (predev) + control — local dev with cloud k3s",
+    "dev": "nest start --watch --env-file .env",
     "start:debug": "nest start --debug --watch --env-file .env",
     "start:prod": "node dist/main.js",
+    "//tunnel": "cloudflared only, foreground — Ctrl+C stops it",
+    "tunnel": "bash -c 'set -a && source .env && set +a && exec cloudflared tunnel run --token \"$CLOUDFLARED_TUNNEL_TOKEN\"'",
     "lint": "eslint \"{src,apps,libs}/**/*.ts\" --fix"
   },
   "dependencies": {
