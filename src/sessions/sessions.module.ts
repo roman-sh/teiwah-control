@@ -1,5 +1,5 @@
 import { Module } from '@nestjs/common'
-import { DbModule } from './db.module'
+import { DbModule } from '../db/db.module'
 import { SessionsController } from './sessions.controller'
 import { InternalController } from './internal.controller'
 import { K8sService } from './k8s.service'

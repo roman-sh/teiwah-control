@@ -19,7 +19,7 @@ import {
 import { randomBytes } from 'crypto'
 import { K8sService } from './k8s.service'
 import { ZuploService } from './zuplo.service'
-import { DbService } from './db.service'
+import { DbService } from '../db/db.service'
 import { UserIdHeaderGuard } from './user-id-header.guard'
 
 @Controller('sessions')

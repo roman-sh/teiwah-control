@@ -7,7 +7,7 @@ import {
   HttpException,
   HttpStatus
 } from '@nestjs/common'
-import { DbService } from './db.service'
+import { DbService } from '../db/db.service'
 
 @Controller('sessions')
 export class InternalController {

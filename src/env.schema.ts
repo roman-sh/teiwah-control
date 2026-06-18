@@ -11,7 +11,13 @@ export const envSchema = z.object({
   ZUPLO_API_KEY: z.string(),
   ZUPLO_ACCOUNT: z.string(),
   ZUPLO_KEY_BUCKET: z.string(),
-  ZUPLO_API_BASE: z.string()
+  ZUPLO_API_BASE: z.string(),
+  FS_PRODUCT_ID: z.string(),
+  FS_PLAN_ID: z.string(),
+  FS_PRICING_ID: z.string(),
+  FS_API_KEY: z.string(),
+  FS_PUBLIC_KEY: z.string(),
+  FS_SECRET_KEY: z.string()
 })
 
 export type Env = z.infer<typeof envSchema>

@@ -6,6 +6,17 @@ datasource db {
   provider = "postgresql"
 }
 
+model User {
+  id             String   @id // Clerk user id
+  email          String   @unique
+  freemiusUserId String?  @unique
+  planId         String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@map("users")
+}
+
 model Session {
   id            String   @id
   userId        String
