@@ -1,30 +1,31 @@
 import { Injectable } from '@nestjs/common'
+import type { EmailAddressJSON, WebhookEvent } from '@clerk/backend'
 import { DbService } from '../db/db.service'
 
-type ClerkEmailAddress = {
-  id: string
-  email_address: string
-}
-
-export type ClerkUserCreatedPayload = {
-  type: string
-  data: {
-    id: string
-    email_addresses?: ClerkEmailAddress[]
-    primary_email_address_id?: string | null
-  }
-}
+export type ClerkUserSyncWebhook = Extract<
+  WebhookEvent,
+  { type: 'user.created' | 'user.updated' }
+>
 
 @Injectable()
 export class UsersService {
   constructor(private readonly db: DbService) {}
 
-  async upsertFromClerkUserCreated(payload: ClerkUserCreatedPayload): Promise<void> {
+  /**
+   * Keeps `users.email` in sync with Clerk's primary email.
+   * Called on `user.created` (initial row) and `user.updated` (email change).
+   * Needed for Freemius bootstrap binding, which matches on exact email before
+   * `freemiusUserId` is set. Post-bind, entitlement uses `freemiusUserId`.
+   */
+  async syncFromClerkWebhook(payload: ClerkUserSyncWebhook): Promise<void> {
     const { id, email_addresses, primary_email_address_id } = payload.data
     const email = resolvePrimaryEmail(email_addresses, primary_email_address_id)
 
     if (!email) {
-      log.warn({ clerkUserId: id }, 'Clerk user.created with no email — skipped')
+      log.warn(
+        { clerkUserId: id, event: payload.type },
+        'Clerk user webhook with no email — skipped'
+      )
       return
     }
 
@@ -34,12 +35,12 @@ export class UsersService {
       update: { email }
     })
 
-    log.info({ clerkUserId: id, email }, 'User upserted from Clerk webhook')
+    log.info({ clerkUserId: id, email, event: payload.type }, 'User synced from Clerk webhook')
   }
 }
 
 function resolvePrimaryEmail(
-  addresses: ClerkEmailAddress[] | undefined,
+  addresses: EmailAddressJSON[] | undefined,
   primaryId: string | null | undefined
 ): string | undefined {
   if (!addresses?.length) return undefined
