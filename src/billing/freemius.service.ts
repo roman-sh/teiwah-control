@@ -1,93 +1,210 @@
 import { Injectable } from '@nestjs/common'
-import type { EventEntity, WebhookEvent } from '@freemius/sdk'
+import {
+  Freemius,
+  idToNumber,
+  type EventEntity,
+  type PurchaseInfo,
+  type WebhookEvent
+} from '@freemius/sdk'
+import { ReconciliationQueueService } from '../bullmq/reconciliation-queue.service'
 import { DbService } from '../db/db.service'
 
+/** Thrown when Freemius returns an HTTP error the job should retry (e.g. 503). */
+export class FreemiusApiError extends Error {
+  constructor(
+    readonly freemiusUserId: string,
+    readonly status: number
+  ) {
+    super(`Freemius API error ${status} for user ${freemiusUserId}`)
+    this.name = 'FreemiusApiError'
+  }
+}
+
+/** Thrown when a license exists but Freemius returned no numeric quota. */
+export class FreemiusLicenseQuotaMissingError extends Error {
+  constructor(readonly licenseId: string) {
+    super(`Freemius license has no quota: ${licenseId}`)
+    this.name = 'FreemiusLicenseQuotaMissingError'
+  }
+}
+
 /**
- * What Freemius actually POSTs: `WebhookEvent` plus top-level envelope fields
- * (`user_id`, etc.) that the SDK's `WebhookEvent` type omits.
+ * Freemius webhook body plus `user_id` on the envelope (the SDK type omits it).
  */
 export type FreemiusWebhookPayload = WebhookEvent & Pick<EventEntity, 'user_id'>
 
-/**
- * Narrowed alias for the one event shape where the license has been removed.
- *
- * The SDK models webhook payloads as a discriminated union (`WebhookEvent`),
- * but inside a `switch (payload.type)` TypeScript can't always re-narrow the
- * union for us (the `data`/`objects` shape differs per event). We cast to this
- * alias at the `license.deleted` branch so the `data.license_id` access is typed.
- */
-type LicenseDeletedEvent = WebhookEvent<'license.deleted'>
-
 @Injectable()
 export class FreemiusService {
-  constructor(private readonly db: DbService) {}
+  private readonly freemius: Freemius
+
+  /** Wires the Freemius SDK client and Nest dependencies. */
+  constructor(
+    private readonly db: DbService,
+    private readonly reconciliationQueue: ReconciliationQueueService
+  ) {
+    this.freemius = new Freemius({
+      productId: env.FS_PRODUCT_ID,
+      apiKey: env.FS_API_KEY,
+      secretKey: env.FS_SECRET_KEY,
+      publicKey: env.FS_PUBLIC_KEY
+    })
+  }
 
   /**
-   * Entry point for every Freemius webhook we receive.
+   * How many concurrent sessions this Freemius user is allowed to run right now.
    *
-   * TRUST MODEL (v1): we do NOT verify a signature or shared token on these
-   * requests. The webhook body is treated as an untrusted *notification* only —
-   * a hint that "something about a license changed". The plan is for any state
-   * that actually grants entitlement to be re-fetched from the Freemius API
-   * (authenticated with our own API key) rather than trusted from the payload.
-   * That re-fetch is the deferred "Re-fetch + reconcile" step below.
+   * First we call the SDK's retrievePurchases. Teiwah expects one active license
+   * per user, so this normally returns a single purchase; we take the first and
+   * derive quota from it. That covers the usual path after signup, upgrade, or
+   * cancel.
    *
-   * SCOPE (v1): we only care about `license.*` events here. Subscription and
-   * payment events flow through the same endpoint but are intentionally ignored
-   * for now — licenses are the single source of truth for entitlement.
+   * When retrievePurchases returns an empty array, we cannot tell why from the
+   * SDK alone: the user may have no active license, the user may be gone from
+   * Freemius, or Freemius may have failed and the SDK collapsed the error into
+   * []. So we make a second request with the raw API client — status only — on
+   * GET …/users/{id}/licenses.json?type=active:
+   *   - 404 → user gone → quota 0
+   *   - 200 → user exists, SDK [] is real (no active license) → quota 0
+   *   - anything else → throw FreemiusApiError; BullMQ retries (API error)
+   *
+   * @param freemiusUserId - Freemius user id from webhooks or our users row.
+   * @returns Effective session quota (0 if expired or no active license).
+   * @throws {FreemiusApiError} When Freemius returns a retryable HTTP error.
+   * @throws {FreemiusLicenseQuotaMissingError} When quota is null on a valid license.
+   */
+  async getEntitlement(freemiusUserId: string): Promise<number> {
+    const purchases = await this.freemius.purchase.retrievePurchases(freemiusUserId)
+
+    switch (purchases.length) {
+      case 0:
+        return this.resolveEntitlementWhenNoPurchases(freemiusUserId)
+      default:
+        return this.effectiveQuotaFromPurchase(purchases[0])
+    }
+  }
+
+  /**
+   * Handles incoming Freemius webhooks.
+   *
+   * We do not verify a signature in v1. The body is only a notification that
+   * something changed — the worker re-fetches entitlement from Freemius when the
+   * delayed job runs, instead of trusting quota or expiration from the payload.
+   *
+   * @param payload - Parsed webhook body from the controller.
    */
   async handleLicenseWebhook(payload: FreemiusWebhookPayload): Promise<void> {
-    // Ignore everything that isn't a license lifecycle event (subscription.*,
-    // payment.*, etc.). Returning early keeps the handler — and our logs — focused.
-    if (!payload.type.startsWith('license.')) {
-      log.info(
+    // Subscribe to these in the Freemius dashboard. plan.changed is covered by
+    // license.updated. Everything else (other license.*, payments, etc.) is ignored.
+    switch (payload.type) {
+      case 'license.deleted':
+      case 'license.updated':
+      case 'license.created':
+      case 'license.cancelled':
+      case 'license.expired':
+      case 'license.extended':
+      case 'license.shortened':
+        await this.reconcileLicenseWebhook(payload)
+        break
+      default:
+        log.info(
+          { eventId: payload.id, type: payload.type },
+          payload.type.startsWith('license.')
+            ? 'Freemius license webhook ignored — not a reconciliation trigger'
+            : 'Freemius webhook ignored — not a license event'
+        )
+    }
+  }
+
+  /**
+   * Runs bind + enqueue for a license webhook that should trigger reconciliation.
+   *
+   * @param payload - A license.* event from {@link handleLicenseWebhook}.
+   */
+  private async reconcileLicenseWebhook(payload: FreemiusWebhookPayload): Promise<void> {
+    const freemiusUserId = payload.user_id ? String(payload.user_id) : undefined
+    if (!freemiusUserId) {
+      log.warn(
         { eventId: payload.id, type: payload.type },
-        'Freemius webhook ignored — not a license event'
+        'Freemius license webhook with no user id — cannot enqueue reconciliation'
       )
       return
     }
 
     log.info(
-      { eventId: payload.id, type: payload.type, userId: payload.user_id },
+      { eventId: payload.id, type: payload.type, freemiusUserId },
       'Freemius license webhook processing'
     )
 
-    switch (payload.type) {
-      case 'license.deleted': {
-        // A deleted license means the user should lose access. We don't act on
-        // it yet: reconciliation (tearing down over-quota sessions) depends on
-        // SessionsService, which isn't built. For now we only record that it
-        // happened so the event isn't silently swallowed.
-        const event = payload as LicenseDeletedEvent
-        log.info({ licenseId: event.data.license_id }, 'license.deleted — reconcile deferred')
-        return
-      }
-      default:
-        // Every other license event (created/updated/extended/expired/...) is
-        // treated identically in v1: make sure the Freemius user is linked to
-        // our local user row. We deliberately don't branch per sub-type yet.
-        await this.bindFreemiusUser(payload)
-    }
-    // NEXT STEP (deferred): after binding, re-fetch the authoritative license
-    // from the Freemius API and reconcile local state (e.g. teardown sessions
-    // that now exceed the license quota). Intentionally not implemented yet.
+    // Link Freemius user to our users row if not already. Needs email in payload;
+    // delete and some dashboard events omit it, so binding may no-op until later.
+    await this.bindFreemiusUser(payload)
+
+    await this.reconciliationQueue.enqueueReconciliation({ freemiusUserId })
   }
 
   /**
-   * Links a Freemius user to our local `users` row ("binding").
+   * Derives effective quota from an SDK purchase (retrievePurchases result).
    *
-   * WHY THIS EXISTS: a `users` row is created by Clerk (`user.created`) at
-   * sign-up and starts with `freemiusUserId = null`. Freemius is a separate
-   * identity system; the only thing the two share at first purchase is the
-   * email address. So we bootstrap the link by matching on email, then store
-   * the Freemius user id as the *durable* key for all future events.
+   * Checks expiration before quota. Expired licenses return 0 even if quota is
+   * still set in Freemius.
    *
-   * KEY ASSUMPTIONS:
-   *  - email is stable and unique per user across Clerk and Freemius. We rely
-   *    on this only for the very first match; afterwards `freemiusUserId` wins.
-   *  - binding is idempotent: replaying the same webhook is safe and cheap.
-   *  - this method NEVER creates a `users` row. If there's no local user for the
-   *    email, we skip — Clerk is the only source that creates users.
+   * @param purchase - One active purchase from retrievePurchases.
+   * @returns Effective session quota.
+   * @throws {FreemiusLicenseQuotaMissingError} When quota is null or undefined.
+   */
+  private effectiveQuotaFromPurchase(purchase: PurchaseInfo): number {
+    // Expired license → user may not run any sessions, regardless of quota field.
+    if (purchase.expiration && purchase.expiration < new Date()) return 0
+    // Teiwah plans always have a number. Freemius uses null for unlimited — not valid here.
+    if (purchase.quota === null || purchase.quota === undefined) {
+      throw new FreemiusLicenseQuotaMissingError(purchase.licenseId)
+    }
+    return purchase.quota
+  }
+
+  /**
+   * Fallback when retrievePurchases returned an empty array.
+   *
+   * SDK [] can mean three things; unstable status disambiguates (no body read):
+   *   - 404 — user not found → quota 0
+   *   - 200 — user exists, no active license → quota 0
+   *   - other — API error → throw, BullMQ retries
+   *
+   * @param freemiusUserId - Freemius user id to look up.
+   * @returns 0 when the user is gone or has no active license.
+   * @throws {FreemiusApiError} When Freemius returns a status other than 404 or 200.
+   */
+  private async resolveEntitlementWhenNoPurchases(freemiusUserId: string): Promise<number> {
+    const { response } = await this.freemius.api.__unstable_ApiClient.GET(
+      '/products/{product_id}/users/{user_id}/licenses.json',
+      {
+        params: {
+          path: {
+            product_id: idToNumber(env.FS_PRODUCT_ID),
+            user_id: idToNumber(freemiusUserId)
+          },
+          query: { type: 'active' }
+        }
+      }
+    )
+
+    switch (response.status) {
+      case 404:
+      case 200:
+        return 0
+      default:
+        throw new FreemiusApiError(freemiusUserId, response.status)
+    }
+  }
+
+  /**
+   * Store freemiusUserId on our users row so future webhooks can find the user.
+   *
+   * Clerk creates the row at sign-up (email only). Freemius has its own user id.
+   * On the first license event we match by email, then freemiusUserId becomes the
+   * permanent key. We never create users here — only Clerk does.
+   *
+   * @param payload - License webhook; must include user_id, and email on first bind.
    */
   private async bindFreemiusUser(payload: FreemiusWebhookPayload): Promise<void> {
     const freemiusUserId = payload.user_id ? String(payload.user_id) : undefined
@@ -101,8 +218,7 @@ export class FreemiusService {
 
     log.info({ eventId: payload.id, freemiusUserId }, 'Freemius bind attempt')
 
-    // Fast path / idempotency: if some row already carries this freemiusUserId
-    // the binding is done. We can stop without an email lookup or a write.
+    // Already linked — nothing to do.
     const alreadyBound = await this.db.user.findUnique({
       where: { freemiusUserId }
     })
@@ -114,16 +230,14 @@ export class FreemiusService {
       return
     }
 
-    // Bootstrap key. Only license events that include the user object carry an
-    // email (e.g. a Checkout purchase). Manual/dashboard changes may not — in
-    // that case we can't bootstrap the link and wait for an event that can.
+    // First-time bind: match Clerk user by email from the webhook payload.
     const email =
-      'objects' in payload && payload.objects && 'user' in payload.objects
+      payload.objects && 'user' in payload.objects
         ? payload.objects.user?.email
         : undefined
     if (!email) {
-      log.warn(
-        { eventId: payload.id, freemiusUserId },
+      log.debug(
+        { eventId: payload.id, freemiusUserId, type: payload.type },
         'Freemius license event with no user email — cannot bind'
       )
       return
@@ -131,21 +245,16 @@ export class FreemiusService {
 
     log.info({ eventId: payload.id, freemiusUserId, email }, 'Freemius bind — matching email')
 
-    // Match the Freemius email to a Clerk-created user. No match = a purchase by
-    // someone who hasn't signed up in our app yet (or a different email). We do
-    // NOT create a user here; we skip and let a later event (or sign-up) resolve it.
     const user = await this.db.user.findUnique({ where: { email } })
     if (!user) {
       log.warn(
-        { eventId: payload.id, freemiusUserId, email },
+        { eventId: payload.id, freemiusUserId, email, type: payload.type },
         'No users row for Freemius email — skipped bind'
       )
       return
     }
 
-    // Safety check: the row matched by email is already bound to a *different*
-    // Freemius user. This shouldn't happen under our assumptions, so we refuse
-    // to silently overwrite the link and surface it for investigation instead.
+    // Same email already tied to a different Freemius account — do not overwrite.
     if (user.freemiusUserId && user.freemiusUserId !== freemiusUserId) {
       log.warn(
         { eventId: payload.id, clerkUserId: user.id, email, freemiusUserId },
@@ -154,8 +263,6 @@ export class FreemiusService {
       return
     }
 
-    // Persist the durable link. From now on this user is identified by
-    // freemiusUserId for every future webhook, regardless of email changes.
     await this.db.user.update({
       where: { id: user.id },
       data: { freemiusUserId }

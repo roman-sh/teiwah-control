@@ -26,6 +26,19 @@ export class K8sService {
   }
 
   /**
+   * Delete teardown helper. A 404 means the resource is already gone — log and
+   * continue so retries stay idempotent. Any other API error propagates to the
+   * caller.
+   */
+  private rethrowUnlessNotFound(error: unknown, message: string): void {
+    if (error instanceof k8s.ApiException && error.code === 404) {
+      log.warn(error, message)
+      return
+    }
+    throw error
+  }
+
+  /**
    * Bounded pod + deployment watch after create — logs provisionState transitions.
    * Does not block callers; safe to fire-and-forget from POST /sessions.
    */
@@ -35,6 +48,11 @@ export class K8sService {
     })
   }
 
+  /**
+   * Provision all k8s resources for a session worker: PVC, Deployment, Service,
+   * Traefik middleware, and Ingress. Throws if any create call fails — no DB
+   * row should exist until this succeeds.
+   */
   async createSessionWorker(sessionId: string) {
     const namespace = env.K8S_NAMESPACE
     const workerPort = Number(env.SESSION_WORKER_PORT)
@@ -224,6 +242,11 @@ export class K8sService {
     }
   }
 
+  /**
+   * Tear down all k8s resources for a session worker (reverse of create).
+   * Each delete tolerates 404; any other error fails the whole call so the
+   * caller can retry before removing the DB row.
+   */
   async deleteSessionWorker(sessionId: string) {
     const namespace = env.K8S_NAMESPACE
 
@@ -234,7 +257,7 @@ export class K8sService {
         namespace
       })
     } catch (e: unknown) {
-      log.warn(e, `Failed to delete Ingress ${sessionId} (might not exist)`)
+      this.rethrowUnlessNotFound(e, `Failed to delete Ingress ${sessionId} (might not exist)`)
     }
 
     try {
@@ -251,7 +274,7 @@ export class K8sService {
           name: `${sessionId}-strip`
         })
     } catch (e: unknown) {
-      log.warn(
+      this.rethrowUnlessNotFound(
         e,
         `Failed to delete Traefik Middleware ${sessionId}-strip (might not exist)`
       )
@@ -264,7 +287,7 @@ export class K8sService {
         namespace
       })
     } catch (e: unknown) {
-      log.warn(e, `Failed to delete Service ${sessionId} (might not exist)`)
+      this.rethrowUnlessNotFound(e, `Failed to delete Service ${sessionId} (might not exist)`)
     }
 
     try {
@@ -274,7 +297,10 @@ export class K8sService {
         namespace
       })
     } catch (e: unknown) {
-      log.warn(e, `Failed to delete Deployment ${sessionId} (might not exist)`)
+      this.rethrowUnlessNotFound(
+        e,
+        `Failed to delete Deployment ${sessionId} (might not exist)`
+      )
     }
 
     try {
@@ -284,7 +310,7 @@ export class K8sService {
         namespace
       })
     } catch (e: unknown) {
-      log.warn(
+      this.rethrowUnlessNotFound(
         e,
         `Failed to delete PVC ${sessionId}-storage (might not exist)`
       )

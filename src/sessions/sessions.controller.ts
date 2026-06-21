@@ -19,6 +19,7 @@ import {
 import { randomBytes } from 'crypto'
 import { K8sService } from './k8s.service'
 import { ZuploService } from './zuplo.service'
+import { SessionsService } from './sessions.service'
 import { DbService } from '../db/db.service'
 import { UserIdHeaderGuard } from './user-id-header.guard'
 
@@ -28,6 +29,7 @@ export class SessionsController {
   constructor(
     private readonly k8sService: K8sService,
     private readonly zuploService: ZuploService,
+    private readonly sessionsService: SessionsService,
     private readonly dbService: DbService
   ) {}
 
@@ -175,25 +177,12 @@ export class SessionsController {
   /**
    * DELETE /sessions/:id
    *
-   * Tear down a session: delete DB row immediately; k8s pod + Zuplo consumer
-   * removed in the background (fire-and-forget).
+   * Tear down a session: Zuplo consumer, then k8s worker, then DB row.
    */
   @Delete(':id')
   async deleteSession(@Param('id') id: string) {
     try {
-      // 1. Fire off K8s + Zuplo deletion in the background (fire-and-forget)
-      this.k8sService.deleteSessionWorker(id).catch((error) => {
-        log.error(error, `Background K8s deletion failed for ${id}`)
-      })
-      this.zuploService.deleteSessionConsumer(id).catch((error) => {
-        log.error(error, `Background Zuplo deletion failed for ${id}`)
-      })
-
-      // 2. Hard delete the DB record
-      await this.dbService.session.delete({
-        where: { id }
-      })
-
+      await this.sessionsService.deleteSession(id)
       return { success: true, message: 'Session deleted successfully' }
     } catch (error) {
       log.error(error, `Failed to delete session ${id}`)
