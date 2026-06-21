@@ -51,12 +51,11 @@ export class FreemiusService {
   }
 
   /**
-   * How many concurrent sessions this Freemius user is allowed to run right now.
+   * Live billing state for this Freemius user: effective quota plus trial flag.
    *
-   * First we call the SDK's retrievePurchases. Teiwah expects one active license
-   * per user, so this normally returns a single purchase; we take the first and
-   * derive quota from it. That covers the usual path after signup, upgrade, or
-   * cancel.
+   * One retrievePurchases call drives both the enforcement read (quota) and the
+   * display read (isTrial/trialEndsAt). Teiwah expects one active license per
+   * user, so this normally returns a single purchase; we take the first.
    *
    * When retrievePurchases returns an empty array, we cannot tell why from the
    * SDK alone: the user may have no active license, the user may be gone from
@@ -67,20 +66,59 @@ export class FreemiusService {
    *   - 200 → user exists, SDK [] is real (no active license) → quota 0
    *   - anything else → throw FreemiusApiError; BullMQ retries (API error)
    *
+   * The license carries no trial flag, so trial is inferred as a valid (active,
+   * non-expired) license with no subscription — a no-payment trial has a license
+   * but no subscription yet (BILLING.md §7/§10). `trialEndsAt` is the license
+   * expiration. An empty/expired result is never a trial.
+   *
+   * @param freemiusUserId - Freemius user id from webhooks or our users row.
+   * @returns Effective quota and trial state.
+   * @throws {FreemiusApiError} When Freemius returns a retryable HTTP error.
+   * @throws {FreemiusLicenseQuotaMissingError} When quota is null on a valid license.
+   */
+  async getBillingSummary(freemiusUserId: string): Promise<{
+    quota: number
+    isTrial: boolean
+    trialEndsAt: Date | null
+  }> {
+    const purchases =
+      await this.freemius.purchase.retrievePurchases(freemiusUserId)
+
+    switch (purchases.length) {
+      case 0: {
+        // Empty — confirm it's a real "no license", not a swallowed Freemius
+        // outage (throws if it can't confirm). No license → quota 0, no trial.
+        await this.assertNoActiveLicense(freemiusUserId)
+        return { quota: 0, isTrial: false, trialEndsAt: null }
+      }
+      default: {
+        // One active license expected — take the first. Quota comes from the
+        // license; trial is inferred as a valid (active) license with no
+        // subscription, with the license expiration as its end date.
+        const purchase = purchases[0]
+        const quota = this.effectiveQuotaFromPurchase(purchase)
+        const isTrial = purchase.isActive && !purchase.isSubscription()
+        return {
+          quota,
+          isTrial,
+          trialEndsAt: isTrial ? purchase.expiration : null
+        }
+      }
+    }
+  }
+
+  /**
+   * Effective concurrent-session quota — the enforcement read for the provision
+   * gate and the reconciler. Thin wrapper over {@link getBillingSummary}; trial
+   * fields are ignored here.
+   *
    * @param freemiusUserId - Freemius user id from webhooks or our users row.
    * @returns Effective session quota (0 if expired or no active license).
    * @throws {FreemiusApiError} When Freemius returns a retryable HTTP error.
    * @throws {FreemiusLicenseQuotaMissingError} When quota is null on a valid license.
    */
   async getEntitlement(freemiusUserId: string): Promise<number> {
-    const purchases = await this.freemius.purchase.retrievePurchases(freemiusUserId)
-
-    switch (purchases.length) {
-      case 0:
-        return this.resolveEntitlementWhenNoPurchases(freemiusUserId)
-      default:
-        return this.effectiveQuotaFromPurchase(purchases[0])
-    }
+    return (await this.getBillingSummary(freemiusUserId)).quota
   }
 
   /**
@@ -211,18 +249,19 @@ export class FreemiusService {
   }
 
   /**
-   * Fallback when retrievePurchases returned an empty array.
+   * Confirm an empty retrievePurchases result really means "no active license".
    *
-   * SDK [] can mean three things; unstable status disambiguates (no body read):
-   *   - 404 — user not found → quota 0
-   *   - 200 — user exists, no active license → quota 0
-   *   - other — API error → throw, BullMQ retries
+   * The SDK collapses API errors into [], so an empty array is ambiguous. A raw
+   * status-only request disambiguates (no body read):
+   *   - 404 — user not found → genuinely no license (returns)
+   *   - 200 — user exists, no active license → genuinely no license (returns)
+   *   - other — API error → throw, so callers retry/degrade instead of treating
+   *     an outage as quota 0
    *
    * @param freemiusUserId - Freemius user id to look up.
-   * @returns 0 when the user is gone or has no active license.
    * @throws {FreemiusApiError} When Freemius returns a status other than 404 or 200.
    */
-  private async resolveEntitlementWhenNoPurchases(freemiusUserId: string): Promise<number> {
+  private async assertNoActiveLicense(freemiusUserId: string): Promise<void> {
     const { response } = await this.freemius.api.__unstable_ApiClient.GET(
       '/products/{product_id}/users/{user_id}/licenses.json',
       {
@@ -239,7 +278,7 @@ export class FreemiusService {
     switch (response.status) {
       case 404:
       case 200:
-        return 0
+        return
       default:
         throw new FreemiusApiError(freemiusUserId, response.status)
     }
