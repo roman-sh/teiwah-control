@@ -65,7 +65,7 @@ export class ReconciliationProcessor extends WorkerHost {
     // All sessions count toward quota in v1 (no suspended state yet).
     // Newest first — when quota shrinks we delete the most recently created
     // sessions and keep the oldest (default until we decide otherwise).
-    const sessions = await this.db.session.findMany({
+    const sessions = await this.db.activeSession.findMany({
       where: { userId: user.id },
       orderBy: { createdAt: 'desc' },
       select: { id: true }

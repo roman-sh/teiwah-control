@@ -1,5 +1,6 @@
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
+  previewFeatures = ["views"]
 }
 
 datasource db {
@@ -23,9 +24,24 @@ model Session {
   phoneNumber   String?
   webhookUrl    String?
   apiKeyMasked  String?
+  isDeleted     Boolean  @default(false)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
   @@map("sessions")
+}
+
+/// Non-deleted sessions only (backed by the `active_sessions` view). Read-only —
+/// create, soft-delete, and field updates go through `Session`.
+view ActiveSession {
+  id           String   @unique
+  userId       String
+  phoneNumber  String?
+  webhookUrl   String?
+  apiKeyMasked String?
+  createdAt    DateTime
+  updatedAt    DateTime
+
+  @@map("active_sessions")
 }
 

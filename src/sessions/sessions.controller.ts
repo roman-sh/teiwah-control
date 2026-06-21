@@ -42,7 +42,7 @@ export class SessionsController {
   @Get()
   async getUserSessions(@Headers('x-user-id') userId: string) {
     try {
-      const sessions = await this.dbService.session.findMany({
+      const sessions = await this.dbService.activeSession.findMany({
         where: { userId },
         // Oldest first — dashboard shows sessions in creation order.
         orderBy: { createdAt: 'asc' }
@@ -150,7 +150,7 @@ export class SessionsController {
   ) {
     try {
       // Ensure the session belongs to the user
-      const session = await this.dbService.session.findUnique({
+      const session = await this.dbService.activeSession.findUnique({
         where: { id }
       })
 
@@ -177,7 +177,7 @@ export class SessionsController {
   /**
    * DELETE /sessions/:id
    *
-   * Tear down a session: Zuplo consumer, then k8s worker, then DB row.
+   * Tear down a session: Zuplo consumer, then k8s worker, then isDeleted in DB.
    */
   @Delete(':id')
   async deleteSession(@Param('id') id: string) {
