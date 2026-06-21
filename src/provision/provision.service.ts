@@ -86,8 +86,8 @@ export class ProvisionService {
     //   checkout: {}           → new purchase — frontend opens the Freemius overlay
     //                            itself (Clerk email + readonly_user). No backend
     //                            pre-step; nothing to generate here.
-    //   checkout: { settings } → upgrade — backend-generated license-scoped checkout.
-    //                            Not implemented yet; POST /billing/checkout later.
+  //   checkout: { settings } → upgrade — backend-generated license-scoped checkout
+  //                            (createLicenseScopedCheckout / POST /billing/checkout).
     //
     // On overlay success the frontend retries POST /sessions; the gate re-fetches
     // entitlement live so the retry sees the fresh quota.
@@ -128,19 +128,30 @@ export class ProvisionService {
     // Room under paid quota — gate passes, caller may provision.
     if (activeCount < quota) return
 
-    // At or over paid quota (expired license → quota 0 counts here too).
+    // At or over paid quota — 402 with license-scoped checkout settings when possible.
+    const checkout = await this.buildUpgradeCheckout(userId, quota)
+
     throw new ProvisionGateBlockedException(
       {
         error: 'quota_exceeded',
         message: 'Subscribe or upgrade to create another session.',
         quota,
         used: activeCount,
-        // TODO: existing license → checkout: { settings } from POST /billing/checkout.
-        // For now {} — same new-purchase branch until upgrade checkout is wired.
-        checkout: {}
+        checkout
       },
       HttpStatus.PAYMENT_REQUIRED
     )
+  }
+
+  /**
+   * License-scoped checkout for the 402 path — authorize one more paid seat
+   * (current Freemius quota + 1). Same for create and revive: re-subscribe
+   * after lapse (0 + 1), at-capacity upgrade (1 + 1), etc.
+   */
+  private async buildUpgradeCheckout(userId: string, quota: number) {
+    return this.freemiusService.createLicenseScopedCheckout(userId, {
+      quota: quota + 1
+    })
   }
 
   /**

@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common'
+import { HttpException, HttpStatus, Injectable } from '@nestjs/common'
 import {
   Freemius,
   idToNumber,
@@ -81,6 +81,54 @@ export class FreemiusService {
       default:
         return this.effectiveQuotaFromPurchase(purchases[0])
     }
+  }
+
+  /**
+   * Authorized overlay settings for an existing license (upgrade or convert).
+   *
+   * Resolves license_id server-side from the Clerk user row — the client must
+   * not send it (BILLING.md §7). Omit `quota` to convert at the current quota;
+   * pass a number to authorize an add-quota upgrade.
+   */
+  async createLicenseScopedCheckout(
+    clerkUserId: string,
+    options?: { quota: number }
+  ) {
+    const user = await this.db.user.findUnique({ where: { id: clerkUserId } })
+    if (!user) {
+      throw new HttpException('User not found', HttpStatus.NOT_FOUND)
+    }
+    if (!user.freemiusUserId) {
+      throw new HttpException(
+        {
+          error: 'no_license',
+          message: 'No billing account linked yet. Start a trial first.'
+        },
+        HttpStatus.NOT_FOUND
+      )
+    }
+
+    const purchases = await this.freemius.purchase.retrievePurchases(
+      user.freemiusUserId
+    )
+    if (purchases.length === 0) {
+      throw new HttpException(
+        {
+          error: 'no_license',
+          message: 'No active license found for this account.'
+        },
+        HttpStatus.NOT_FOUND
+      )
+    }
+
+    const licenseId = purchases[0].licenseId
+    const checkout = await this.freemius.checkout.create({
+      licenseId,
+      planId: env.FS_PLAN_ID,
+      ...(options !== undefined ? { quota: options.quota } : {})
+    })
+
+    return { settings: checkout.getOptions() }
   }
 
   /**

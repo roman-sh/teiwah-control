@@ -8,6 +8,7 @@ import { ZuploService } from './zuplo.service'
 import { SessionsService } from './sessions.service'
 import { FreemiusService } from '../billing/freemius.service'
 import { FreemiusController } from '../billing/freemius.controller'
+import { BillingController } from '../billing/billing.controller'
 import { ProvisionService } from '../provision/provision.service'
 import { ReconciliationProcessor } from '../provision/reconciliation.processor'
 
@@ -24,7 +25,7 @@ import { ReconciliationProcessor } from '../provision/reconciliation.processor'
  */
 @Module({
   imports: [DbModule, BullMqModule],
-  controllers: [SessionsController, InternalController, FreemiusController],
+  controllers: [SessionsController, InternalController, FreemiusController, BillingController],
   providers: [
     K8sService,
     ZuploService,
