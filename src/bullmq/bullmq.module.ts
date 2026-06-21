@@ -12,9 +12,9 @@ import {
  * BullMQ infrastructure. `forRoot` once (shared Redis); each queue gets its own
  * `registerQueue` with queue-specific defaults. Add future queues here.
  *
- * Processors live in the domain module that owns the job (e.g.
- * ReconciliationProcessor in BillingModule). Export `BullModule` so those
- * modules can register `@Processor` handlers against the same queue.
+ * Processors live with the code that owns the job (e.g. ReconciliationProcessor
+ * in provision/, registered via SessionsModule). Export `BullModule` so the
+ * owning module can register `@Processor` handlers against the same queue.
  */
 @Module({
   imports: [

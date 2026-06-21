@@ -11,15 +11,10 @@ import {
   HttpStatus,
   UseGuards
 } from '@nestjs/common'
-import {
-  uniqueNamesGenerator,
-  adjectives,
-  animals
-} from 'unique-names-generator'
-import { randomBytes } from 'crypto'
-import { K8sService } from './k8s.service'
 import { ZuploService } from './zuplo.service'
 import { SessionsService } from './sessions.service'
+import { ProvisionService } from '../provision/provision.service'
+import { ProvisionGateBlockedException } from '../provision/provision-gate.exception'
 import { DbService } from '../db/db.service'
 import { UserIdHeaderGuard } from './user-id-header.guard'
 
@@ -27,9 +22,9 @@ import { UserIdHeaderGuard } from './user-id-header.guard'
 @UseGuards(UserIdHeaderGuard)
 export class SessionsController {
   constructor(
-    private readonly k8sService: K8sService,
     private readonly zuploService: ZuploService,
     private readonly sessionsService: SessionsService,
+    private readonly provisionService: ProvisionService,
     private readonly dbService: DbService
   ) {}
 
@@ -67,47 +62,19 @@ export class SessionsController {
   /**
    * POST /sessions
    *
-   * Provision a new session: k8s worker pod → Zuplo consumer + API key → DB row.
-   * Returns full apiKey once; apiKeyMasked is persisted for later list views.
+   * Gated create. The provision gate (abuse caps + Freemius quota) lives in
+   * ProvisionService; on success it delegates to SessionsService for the
+   * k8s/Zuplo/DB mechanics. Lifecycle-only handlers (delete, webhook, api-key)
+   * stay on SessionsService below.
    */
   @Post()
   async createSession(@Headers('x-user-id') userId: string) {
-    const userMascot = uniqueNamesGenerator({
-      dictionaries: [adjectives, animals],
-      separator: '-',
-      length: 2
-    })
-    const suffix = randomBytes(2).toString('hex')
-    const sessionId = `${userMascot}-${suffix}`
-
     try {
-      // 1. Spin up Kubernetes Pod first. If this fails, it throws an error
-      // and we never reach the DB step, preventing "ghost" records in the DB.
-      await this.k8sService.createSessionWorker(sessionId)
-
-      // 2. Zuplo Consumer (name = sessionId) + API key for POST /messages
-      const { apiKey, apiKeyMasked } =
-        await this.zuploService.createSessionConsumer(sessionId)
-
-      // 3. Save to Prisma (PostgreSQL) only after k8s + Zuplo succeed
-      await this.dbService.session.create({
-        data: {
-          id: sessionId,
-          userId,
-          apiKeyMasked
-        }
-      })
-
-      this.k8sService.startProvisioningWatch(sessionId)
-
-      return {
-        sessionId,
-        apiKey,
-        apiKeyMasked,
-        status: 'provisioning',
-        message: 'Session is spinning up. Connect to the events endpoint soon.'
-      }
+      return await this.provisionService.createSession(userId)
     } catch (error) {
+      // Gate blocks (limits, quota) — expected client response, not a server error.
+      if (error instanceof ProvisionGateBlockedException) throw error
+      // k8s, Zuplo, or DB failed — unexpected; log and return 500.
       log.error(error, 'Failed to provision session')
       throw new HttpException(
         'Failed to provision session',

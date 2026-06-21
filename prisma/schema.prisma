@@ -8,12 +8,14 @@ datasource db {
 }
 
 model User {
-  id             String   @id // Clerk user id
-  email          String   @unique
-  freemiusUserId String?  @unique
-  planId         String?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  id                    String   @id // Clerk user id
+  email                 String   @unique
+  freemiusUserId        String?  @unique
+  planId                String?
+  maxConcurrentSessions Int      @default(5)
+  dailyProvisionLimit   Int      @default(5)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
 
   @@map("users")
 }

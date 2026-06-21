@@ -6,7 +6,7 @@ import {
   RECONCILIATION_QUEUE_NAME,
   type ReconciliationJobData
 } from '../bullmq/reconciliation-queue.service'
-import { FreemiusService } from './freemius.service'
+import { FreemiusService } from '../billing/freemius.service'
 
 /**
  * BullMQ worker for billing reconciliation (downward enforcement).
@@ -18,6 +18,11 @@ import { FreemiusService } from './freemius.service'
  *
  * This worker only ever removes sessions. It never creates them. That is
  * intentional: the POST /sessions gate handles upward enforcement separately.
+ *
+ * Lives in provision/ — the downward arm of BILLING.md §4. Like the gate, it
+ * needs both the billing read (FreemiusService) and the session lifecycle
+ * (SessionsService), so it belongs with the enforcement code, not in billing/
+ * (which stays a pure read) or sessions/ (which stays pure lifecycle).
  *
  * If Freemius is temporarily down, getEntitlement throws FreemiusApiError and
  * BullMQ retries the job (3 attempts with backoff — see bullmq.module).
