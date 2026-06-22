@@ -86,13 +86,13 @@ export class ProvisionService {
     //   checkout: {}           → new purchase — frontend opens the Freemius overlay
     //                            itself (Clerk email + readonly_user). No backend
     //                            pre-step; nothing to generate here.
-  //   checkout: { settings } → upgrade — backend-generated license-scoped checkout
-  //                            (createLicenseScopedCheckout / POST /billing/checkout).
+    //   checkout: { settings } → upgrade — backend-generated license-scoped checkout
+    //                            (createLicenseScopedCheckout / POST /billing/checkout).
     //
     // On overlay success the frontend retries POST /sessions; the gate re-fetches
     // entitlement live so the retry sees the fresh quota.
 
-    // Not bound to Freemius yet (Clerk user exists, no license event matched email).
+    // Not bound to Freemius yet — skip the API call; entitlement is definitely 0.
     if (!user.freemiusUserId) {
       throw new ProvisionGateBlockedException(
         {
@@ -128,7 +128,25 @@ export class ProvisionService {
     // Room under paid quota — gate passes, caller may provision.
     if (activeCount < quota) return
 
-    // At or over paid quota — 402 with license-scoped checkout settings when possible.
+    // No active entitlement (never subscribed, or license expired/cancelled).
+    // Use the new-purchase overlay (checkout: {}), not license-scoped checkout —
+    // retrievePurchases only returns active licenses, so createLicenseScopedCheckout
+    // would 404 here. The frontend opens the overlay with trial: true; Freemius
+    // decides trial vs paid from the user's email (second trial → subscription).
+    if (quota === 0) {
+      throw new ProvisionGateBlockedException(
+        {
+          error: 'quota_exceeded',
+          message: 'Subscribe to create a session.',
+          quota: 0,
+          used: activeCount,
+          checkout: {}
+        },
+        HttpStatus.PAYMENT_REQUIRED
+      )
+    }
+
+    // At or over paid quota — license-scoped checkout to add one more seat.
     const checkout = await this.buildUpgradeCheckout(userId, quota)
 
     throw new ProvisionGateBlockedException(
@@ -144,9 +162,8 @@ export class ProvisionService {
   }
 
   /**
-   * License-scoped checkout for the 402 path — authorize one more paid seat
-   * (current Freemius quota + 1). Same for create and revive: re-subscribe
-   * after lapse (0 + 1), at-capacity upgrade (1 + 1), etc.
+   * License-scoped checkout for the at-capacity 402 path — authorize one more
+   * paid seat (current Freemius quota + 1). Only called when quota > 0.
    */
   private async buildUpgradeCheckout(userId: string, quota: number) {
     return this.freemiusService.createLicenseScopedCheckout(userId, {
