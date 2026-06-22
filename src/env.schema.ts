@@ -3,6 +3,14 @@ import { z } from 'zod'
 export const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'production']),
   PORT: z.string(),
+  // Logging — read directly by logger.ts (process.env) so they load before env
+  // parsing; declared here so deploys document/validate them. All optional:
+  // no Better Stack token → logs stay stdout-only (local dev).
+  LOG_LEVEL: z
+    .enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace'])
+    .optional(),
+  BETTERSTACK_SOURCE_TOKEN: z.string().optional(),
+  BETTERSTACK_INGESTING_HOST: z.string().optional(),
   DATABASE_URL: z.string(),
   REDIS_URL: z.string(),
   CONTROL_APP_BASE_URL: z.string(),

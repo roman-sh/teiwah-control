@@ -153,6 +153,7 @@ export class SessionsController {
   async getSessionApiKey(@Param('id') id: string) {
     try {
       const apiKey = await this.zuploService.getSessionConsumerApiKey(id)
+      log.info({ sessionId: id }, 'Session API key revealed')
       return { apiKey }
     } catch (error) {
       if (error instanceof HttpException) throw error
@@ -190,6 +191,7 @@ export class SessionsController {
         data: { webhookUrl }
       })
 
+      log.info({ sessionId: id, userId }, 'Webhook URL updated')
       return { success: true, webhookUrl }
     } catch (error) {
       if (error instanceof HttpException) throw error

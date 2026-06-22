@@ -85,7 +85,7 @@ export class ZuploService {
       throw new Error('Zuplo create consumer succeeded but returned no API key')
     }
 
-    log.info(`Created Zuplo consumer for session ${sessionId}`)
+    log.debug({ sessionId }, 'Created Zuplo consumer')
     return { apiKey, apiKeyMasked: maskApiKey(apiKey) }
   }
 
@@ -145,7 +145,7 @@ export class ZuploService {
     })
 
     if (response.status === 404) {
-      log.warn(`Zuplo consumer ${sessionId} not found on delete`)
+      log.warn({ sessionId }, 'Zuplo consumer not found on delete')
       return
     }
 
@@ -156,7 +156,7 @@ export class ZuploService {
       )
     }
 
-    log.info(`Deleted Zuplo consumer for session ${sessionId}`)
+    log.debug({ sessionId }, 'Deleted Zuplo consumer')
   }
 }
 

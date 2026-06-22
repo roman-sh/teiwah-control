@@ -7,7 +7,7 @@ export const RECONCILIATION_QUEUE_NAME = 'billing-reconciliation'
 /** Job type label inside the queue (BullMQ requires a name on `queue.add`). */
 const RECONCILIATION_JOB_NAME = 'reconcile'
 /** Coalesce burst of license webhooks before one reconcile runs. */
-export const RECONCILIATION_DELAY_MS = 10 * 60 * 1000
+export const RECONCILIATION_DELAY_MS = 5 * 60 * 1000
 export const RECONCILIATION_ATTEMPTS = 3
 export const RECONCILIATION_BACKOFF_DELAY_MS = 30_000
 

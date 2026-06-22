@@ -201,22 +201,22 @@ export class K8sService {
     }
 
     try {
-      log.info(`Creating PersistentVolumeClaim for session ${sessionId}...`)
+      log.debug({ sessionId }, 'Creating PersistentVolumeClaim')
       await this.coreApi.createNamespacedPersistentVolumeClaim({
         namespace,
         body: pvc
       })
 
-      log.info(`Creating Deployment for session ${sessionId}...`)
+      log.debug({ sessionId }, 'Creating Deployment')
       await this.k8sApi.createNamespacedDeployment({
         namespace,
         body: deployment
       })
 
-      log.info(`Creating Service for session ${sessionId}...`)
+      log.debug({ sessionId }, 'Creating Service')
       await this.coreApi.createNamespacedService({ namespace, body: service })
 
-      log.info(`Creating Traefik Middleware for session ${sessionId}...`)
+      log.debug({ sessionId }, 'Creating Traefik Middleware')
       const customApi = new k8s.KubeConfig()
       customApi.loadFromDefault()
       await customApi
@@ -229,12 +229,13 @@ export class K8sService {
           body: middleware
         })
 
-      log.info(`Creating Ingress for session ${sessionId}...`)
+      log.debug({ sessionId }, 'Creating Ingress')
       await this.networkingApi.createNamespacedIngress({
         namespace,
         body: ingress
       })
 
+      log.info({ sessionId }, 'Created k8s resources for session')
       return { success: true, name: sessionId }
     } catch (error) {
       log.error(error, `Failed to create k8s resources for ${sessionId}`)
@@ -251,7 +252,7 @@ export class K8sService {
     const namespace = env.K8S_NAMESPACE
 
     try {
-      log.info(`Deleting Ingress for session ${sessionId}...`)
+      log.debug({ sessionId }, 'Deleting Ingress')
       await this.networkingApi.deleteNamespacedIngress({
         name: sessionId,
         namespace
@@ -261,7 +262,7 @@ export class K8sService {
     }
 
     try {
-      log.info(`Deleting Traefik Middleware for session ${sessionId}...`)
+      log.debug({ sessionId }, 'Deleting Traefik Middleware')
       const customApi = new k8s.KubeConfig()
       customApi.loadFromDefault()
       await customApi
@@ -281,7 +282,7 @@ export class K8sService {
     }
 
     try {
-      log.info(`Deleting Service for session ${sessionId}...`)
+      log.debug({ sessionId }, 'Deleting Service')
       await this.coreApi.deleteNamespacedService({
         name: sessionId,
         namespace
@@ -291,7 +292,7 @@ export class K8sService {
     }
 
     try {
-      log.info(`Deleting Deployment for session ${sessionId}...`)
+      log.debug({ sessionId }, 'Deleting Deployment')
       await this.k8sApi.deleteNamespacedDeployment({
         name: sessionId,
         namespace
@@ -304,7 +305,7 @@ export class K8sService {
     }
 
     try {
-      log.info(`Deleting PersistentVolumeClaim for session ${sessionId}...`)
+      log.debug({ sessionId }, 'Deleting PersistentVolumeClaim')
       await this.coreApi.deleteNamespacedPersistentVolumeClaim({
         name: `${sessionId}-storage`,
         namespace
@@ -315,5 +316,7 @@ export class K8sService {
         `Failed to delete PVC ${sessionId}-storage (might not exist)`
       )
     }
+
+    log.info({ sessionId }, 'Deleted k8s resources for session')
   }
 }

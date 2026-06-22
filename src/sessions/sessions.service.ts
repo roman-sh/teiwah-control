@@ -35,6 +35,8 @@ export class SessionsService {
       length: 2
     })}-${randomBytes(2).toString('hex')}`
 
+    log.debug({ sessionId, userId }, 'Provisioning session')
+
     // k8s first — if this fails we never reach DB, so no ghost rows.
     await this.k8sService.createSessionWorker(sessionId)
 
@@ -48,6 +50,8 @@ export class SessionsService {
         apiKeyMasked
       }
     })
+
+    log.info({ sessionId, userId }, 'Session created')
 
     this.k8sService.startProvisioningWatch(sessionId)
 
@@ -66,11 +70,13 @@ export class SessionsService {
    * teardown succeeds (and remains for provision-rate counting).
    */
   async deleteSession(sessionId: string): Promise<void> {
+    log.debug({ sessionId }, 'Deleting session')
     await this.zuploService.deleteSessionConsumer(sessionId)
     await this.k8sService.deleteSessionWorker(sessionId)
     await this.db.session.update({
       where: { id: sessionId },
       data: { isDeleted: true }
     })
+    log.info({ sessionId }, 'Session deleted')
   }
 }

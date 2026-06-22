@@ -38,6 +38,7 @@ export class InternalController {
         throw new HttpException('Session not found', HttpStatus.NOT_FOUND)
       }
 
+      log.debug({ sessionId: id }, 'Worker fetched session config')
       return session
     } catch (error) {
       if (error instanceof HttpException) throw error
@@ -72,6 +73,7 @@ export class InternalController {
         where: { id },
         data: { phoneNumber }
       })
+      log.info({ sessionId: id, phoneNumber }, 'Session phone updated (WhatsApp connected)')
       return { success: true, phoneNumber }
     } catch (error) {
       log.error(error, `Failed to update phone number for session ${id}`)

@@ -38,6 +38,7 @@ export class ProvisionService {
   async assertProvisionGate(userId: string): Promise<void> {
     const user = await this.db.user.findUnique({ where: { id: userId } })
     if (!user) {
+      log.warn({ userId }, 'Provision gate blocked: user row not found')
       throw new ProvisionGateBlockedException(
         'User not found',
         HttpStatus.NOT_FOUND
@@ -55,6 +56,10 @@ export class ProvisionService {
 
     // 1. Daily rate limit — platform abuse cap, not billing.
     if (dailyCreated >= user.dailyProvisionLimit) {
+      log.info(
+        { userId, used: dailyCreated, limit: user.dailyProvisionLimit },
+        'Provision gate blocked: daily limit'
+      )
       throw new ProvisionGateBlockedException(
         {
           error: 'daily_provision_limit_exceeded',
@@ -68,6 +73,10 @@ export class ProvisionService {
 
     // 2. Concurrent cap — platform abuse cap, not billing.
     if (activeCount >= user.maxConcurrentSessions) {
+      log.info(
+        { userId, used: activeCount, limit: user.maxConcurrentSessions },
+        'Provision gate blocked: concurrent cap'
+      )
       throw new ProvisionGateBlockedException(
         {
           error: 'concurrent_session_limit_exceeded',
@@ -101,6 +110,10 @@ export class ProvisionService {
     if (!freemiusUserId) {
       freemiusUserId = await this.bindFreemiusUser(userId)
       if (!freemiusUserId) {
+        log.info(
+          { userId },
+          'Provision gate blocked: subscription required (new purchase)'
+        )
         throw new ProvisionGateBlockedException(
           {
             error: 'quota_exceeded',
@@ -121,6 +134,10 @@ export class ProvisionService {
     } catch (error) {
       if (error instanceof FreemiusApiError) {
         // Freemius API down — can't verify entitlement; don't provision blind.
+        log.warn(
+          { userId, freemiusUserId },
+          'Provision gate blocked: billing unavailable'
+        )
         throw new ProvisionGateBlockedException(
           {
             error: 'billing_unavailable',
@@ -134,7 +151,13 @@ export class ProvisionService {
     }
 
     // Room under paid quota — gate passes, caller may provision.
-    if (activeCount < quota) return
+    if (activeCount < quota) {
+      log.debug(
+        { userId, quota, used: activeCount },
+        'Provision gate passed'
+      )
+      return
+    }
 
     // No active entitlement (never subscribed, or license expired/cancelled).
     // Use the new-purchase overlay (checkout: {}), not license-scoped checkout —
@@ -142,6 +165,7 @@ export class ProvisionService {
     // would 404 here. The frontend opens the overlay with trial: true; Freemius
     // decides trial vs paid from the user's email (second trial → subscription).
     if (quota === 0) {
+      log.info({ userId }, 'Provision gate blocked: no active entitlement')
       throw new ProvisionGateBlockedException(
         {
           error: 'quota_exceeded',
@@ -157,6 +181,10 @@ export class ProvisionService {
     // At or over paid quota — license-scoped checkout to add one more seat.
     const checkout = await this.buildUpgradeCheckout(userId, quota)
 
+    log.info(
+      { userId, quota, used: activeCount },
+      'Provision gate blocked: upgrade required'
+    )
     throw new ProvisionGateBlockedException(
       {
         error: 'quota_exceeded',

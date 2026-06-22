@@ -13,6 +13,10 @@ export class UserIdHeaderGuard implements CanActivate {
     const userId = request.headers['x-user-id']
 
     if (!userId) {
+      log.warn(
+        { method: request.method, path: request.originalUrl },
+        'Rejected request: missing x-user-id header'
+      )
       throw new UnauthorizedException('Missing x-user-id header')
     }
 
