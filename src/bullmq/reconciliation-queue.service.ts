@@ -6,6 +6,8 @@ export const RECONCILIATION_QUEUE_NAME = 'billing-reconciliation'
 
 /** Job type label inside the queue (BullMQ requires a name on `queue.add`). */
 const RECONCILIATION_JOB_NAME = 'reconcile'
+/** BullMQ rejects purely-numeric custom job ids; Freemius user ids are numeric. */
+const RECONCILIATION_JOB_ID_PREFIX = 'fs-user'
 /** Coalesce burst of license webhooks before one reconcile runs. */
 export const RECONCILIATION_DELAY_MS = 5 * 60 * 1000
 export const RECONCILIATION_ATTEMPTS = 3
@@ -24,9 +26,10 @@ export type ReconciliationJobData = {
  * should be in flight. Webhooks enqueue work; the worker re-fetches Freemius and
  * deletes excess sessions (see BILLING.md).
  *
- * Why jobId = freemiusUserId: BullMQ treats jobId as unique while the job exists.
- * Duplicate webhooks for the same user are ignored — no custom dedup tables or
- * locks. A short delay coalesces bursts before the worker runs.
+ * Why jobId = `JOB-<freemiusUserId>`: BullMQ treats jobId as unique while the job
+ * exists, so duplicate webhooks for the same user are ignored — no custom dedup
+ * tables or locks. The `JOB-` prefix keeps ids non-numeric. A short delay coalesces
+ * bursts before the worker runs.
  */
 @Injectable()
 export class ReconciliationQueueService {
@@ -36,9 +39,8 @@ export class ReconciliationQueueService {
   ) {}
 
   async enqueueReconciliation(data: ReconciliationJobData): Promise<void> {
-    // jobId = freemiusUserId dedupes while a job exists; duplicate webhooks are no-ops.
     const job = await this.queue.add(RECONCILIATION_JOB_NAME, data, {
-      jobId: data.freemiusUserId,
+      jobId: `${RECONCILIATION_JOB_ID_PREFIX}-${data.freemiusUserId}`,
       delay: RECONCILIATION_DELAY_MS
     })
 
