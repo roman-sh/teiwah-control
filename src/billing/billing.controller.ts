@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Get,
   Headers,
   HttpException,
   HttpStatus,
@@ -61,5 +62,18 @@ export class BillingController {
         HttpStatus.INTERNAL_SERVER_ERROR
       )
     }
+  }
+
+  /**
+   * GET /billing/sandbox
+   *
+   * Sandbox params for the client-built new-purchase overlay. Returns
+   * `{ sandbox: { ctx, token } }` outside production and `{ sandbox: null }` in
+   * production, so the live overlay can never be opened in sandbox mode.
+   */
+  @Get('sandbox')
+  async sandbox() {
+    const sandbox = await this.freemiusService.getNewPurchaseSandboxParams()
+    return { sandbox }
   }
 }

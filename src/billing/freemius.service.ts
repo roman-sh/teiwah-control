@@ -163,10 +163,35 @@ export class FreemiusService {
     const checkout = await this.freemius.checkout.create({
       licenseId,
       planId: env.FS_PLAN_ID,
+      isSandbox: this.isSandbox,
       ...(options !== undefined ? { quota: options.quota } : {})
     })
 
     return { settings: checkout.getOptions() }
+  }
+
+  /**
+   * Sandbox params ({ ctx, token }) for the client-built new-purchase overlay.
+   *
+   * The new-purchase / trial overlay is opened client-side with only public
+   * values, so it can't sign its own sandbox token. We mint it here (needs the
+   * secret key) and the board passes it to the overlay. License-scoped checkouts
+   * don't need this — their sandbox flag rides in the server-built settings.
+   *
+   * Returns null in production so the live overlay can never be put in sandbox
+   * mode, regardless of what the client requests.
+   */
+  async getNewPurchaseSandboxParams(): Promise<{
+    ctx: string
+    token: string
+  } | null> {
+    if (!this.isSandbox) return null
+    return this.freemius.checkout.getSandboxParams()
+  }
+
+  /** Whether checkout overlays should open in Freemius sandbox/test mode. */
+  private get isSandbox(): boolean {
+    return env.NODE_ENV !== 'production'
   }
 
   /**
