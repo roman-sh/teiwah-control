@@ -2,6 +2,7 @@ import { HttpException, HttpStatus, Injectable } from '@nestjs/common'
 import {
   Freemius,
   idToNumber,
+  idToString,
   type EventEntity,
   type PurchaseInfo,
   type WebhookEvent
@@ -122,6 +123,24 @@ export class FreemiusService {
   }
 
   /**
+   * Resolve the Freemius user id for an email, or null if none exists yet.
+   *
+   * The provision gate calls this to bind freemiusUserId on a user's first
+   * create (BILLING.md §3/§4.3): the checkout is opened with the Clerk email and
+   * `readonly_user`, so the Freemius account carries that exact email and this
+   * lookup hits it. `retrieveByEmail` collapses a not-found (and, unfortunately,
+   * an API error) into null — the gate treats null as "no account yet" → new
+   * purchase, which self-heals on the next attempt once Freemius has the user.
+   *
+   * @param email - The user's Clerk primary email.
+   * @returns The Freemius user id as a string, or null if no account matches.
+   */
+  async findFreemiusUserIdByEmail(email: string): Promise<string | null> {
+    const user = await this.freemius.api.user.retrieveByEmail(email)
+    return user?.id ? idToString(user.id) : null
+  }
+
+  /**
    * Authorized overlay settings for an existing license (upgrade or convert).
    *
    * Resolves license_id server-side from the Clerk user row — the client must
@@ -231,7 +250,9 @@ export class FreemiusService {
    *
    * @param payload - A license.* event from {@link handleLicenseWebhook}.
    */
-  private async reconcileLicenseWebhook(payload: FreemiusWebhookPayload): Promise<void> {
+  private async reconcileLicenseWebhook(
+    payload: FreemiusWebhookPayload
+  ): Promise<void> {
     const freemiusUserId = payload.user_id ? String(payload.user_id) : undefined
     if (!freemiusUserId) {
       log.warn(
@@ -246,10 +267,8 @@ export class FreemiusService {
       'Freemius license webhook processing'
     )
 
-    // Link Freemius user to our users row if not already. Needs email in payload;
-    // delete and some dashboard events omit it, so binding may no-op until later.
-    await this.bindFreemiusUser(payload)
-
+    // Trigger reconciliation. The reconciler maps freemiusUserId → our users row
+    // and no-ops if there is no row (nothing to reconcile).
     await this.reconciliationQueue.enqueueReconciliation({ freemiusUserId })
   }
 
@@ -307,82 +326,5 @@ export class FreemiusService {
       default:
         throw new FreemiusApiError(freemiusUserId, response.status)
     }
-  }
-
-  /**
-   * Store freemiusUserId on our users row so future webhooks can find the user.
-   *
-   * Clerk creates the row at sign-up (email only). Freemius has its own user id.
-   * On the first license event we match by email, then freemiusUserId becomes the
-   * permanent key. We never create users here — only Clerk does.
-   *
-   * @param payload - License webhook; must include user_id, and email on first bind.
-   */
-  private async bindFreemiusUser(payload: FreemiusWebhookPayload): Promise<void> {
-    const freemiusUserId = payload.user_id ? String(payload.user_id) : undefined
-    if (!freemiusUserId) {
-      log.warn(
-        { eventId: payload.id, type: payload.type },
-        'Freemius license event with no user id — cannot bind'
-      )
-      return
-    }
-
-    log.info({ eventId: payload.id, freemiusUserId }, 'Freemius bind attempt')
-
-    // Already linked — nothing to do.
-    const alreadyBound = await this.db.user.findUnique({
-      where: { freemiusUserId }
-    })
-    if (alreadyBound) {
-      log.info(
-        { eventId: payload.id, freemiusUserId, clerkUserId: alreadyBound.id },
-        'Freemius bind skipped — already bound'
-      )
-      return
-    }
-
-    // First-time bind: match Clerk user by email from the webhook payload.
-    const email =
-      payload.objects && 'user' in payload.objects
-        ? payload.objects.user?.email
-        : undefined
-    if (!email) {
-      log.debug(
-        { eventId: payload.id, freemiusUserId, type: payload.type },
-        'Freemius license event with no user email — cannot bind'
-      )
-      return
-    }
-
-    log.info({ eventId: payload.id, freemiusUserId, email }, 'Freemius bind — matching email')
-
-    const user = await this.db.user.findUnique({ where: { email } })
-    if (!user) {
-      log.warn(
-        { eventId: payload.id, freemiusUserId, email, type: payload.type },
-        'No users row for Freemius email — skipped bind'
-      )
-      return
-    }
-
-    // Same email already tied to a different Freemius account — do not overwrite.
-    if (user.freemiusUserId && user.freemiusUserId !== freemiusUserId) {
-      log.warn(
-        { eventId: payload.id, clerkUserId: user.id, email, freemiusUserId },
-        'users row already bound to a different Freemius user — skipped'
-      )
-      return
-    }
-
-    await this.db.user.update({
-      where: { id: user.id },
-      data: { freemiusUserId }
-    })
-
-    log.info(
-      { eventId: payload.id, clerkUserId: user.id, freemiusUserId, email },
-      'Freemius user bound'
-    )
   }
 }

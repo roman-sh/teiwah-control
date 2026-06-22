@@ -19,7 +19,8 @@ export const envSchema = z.object({
   FS_PRICING_ID: z.string(),
   FS_API_KEY: z.string(),
   FS_PUBLIC_KEY: z.string(),
-  FS_SECRET_KEY: z.string()
+  FS_SECRET_KEY: z.string(),
+  CLERK_SECRET_KEY: z.string()
 })
 
 export type Env = z.infer<typeof envSchema>

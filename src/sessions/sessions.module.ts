@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common'
 import { DbModule } from '../db/db.module'
 import { BullMqModule } from '../bullmq/bullmq.module'
+import { UsersModule } from '../users/users.module'
 import { SessionsController } from './sessions.controller'
 import { InternalController } from './internal.controller'
 import { K8sService } from './k8s.service'
@@ -20,12 +21,18 @@ import { ReconciliationProcessor } from '../provision/reconciliation.processor'
  *
  * Boundary is by convention, not enforced by Nest:
  *   - sessions/  — lifecycle mechanics (k8s, Zuplo, DB, delete) + worker-facing
- *   - billing/   — Freemius read + webhook (entitlement, bind, enqueue)
- *   - provision/ — enforcement that needs BOTH (gate + reconciler)
+ *   - billing/   — Freemius read + webhook (entitlement, checkout, enqueue)
+ *   - provision/ — enforcement that needs BOTH (gate + reconciler); the gate also
+ *                  binds freemiusUserId on first create (Clerk email → Freemius)
  */
 @Module({
-  imports: [DbModule, BullMqModule],
-  controllers: [SessionsController, InternalController, FreemiusController, BillingController],
+  imports: [DbModule, BullMqModule, UsersModule],
+  controllers: [
+    SessionsController,
+    InternalController,
+    FreemiusController,
+    BillingController
+  ],
   providers: [
     K8sService,
     ZuploService,

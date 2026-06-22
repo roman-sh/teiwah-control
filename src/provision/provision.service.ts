@@ -1,9 +1,7 @@
 import { HttpStatus, Injectable } from '@nestjs/common'
 import { DbService } from '../db/db.service'
-import {
-  FreemiusApiError,
-  FreemiusService
-} from '../billing/freemius.service'
+import { FreemiusApiError, FreemiusService } from '../billing/freemius.service'
+import { ClerkService } from '../users/clerk.service'
 import { SessionsService } from '../sessions/sessions.service'
 import { ProvisionGateBlockedException } from './provision-gate.exception'
 
@@ -22,6 +20,7 @@ export class ProvisionService {
   constructor(
     private readonly db: DbService,
     private readonly freemiusService: FreemiusService,
+    private readonly clerkService: ClerkService,
     private readonly sessionsService: SessionsService
   ) {}
 
@@ -39,7 +38,10 @@ export class ProvisionService {
   async assertProvisionGate(userId: string): Promise<void> {
     const user = await this.db.user.findUnique({ where: { id: userId } })
     if (!user) {
-      throw new ProvisionGateBlockedException('User not found', HttpStatus.NOT_FOUND)
+      throw new ProvisionGateBlockedException(
+        'User not found',
+        HttpStatus.NOT_FOUND
+      )
     }
 
     const since = new Date(Date.now() - PROVISION_WINDOW_MS)
@@ -92,24 +94,30 @@ export class ProvisionService {
     // On overlay success the frontend retries POST /sessions; the gate re-fetches
     // entitlement live so the retry sees the fresh quota.
 
-    // Not bound to Freemius yet — skip the API call; entitlement is definitely 0.
-    if (!user.freemiusUserId) {
-      throw new ProvisionGateBlockedException(
-        {
-          error: 'quota_exceeded',
-          message: 'Subscribe to create a session.',
-          quota: 0,
-          used: activeCount,
-          checkout: {} // new-purchase path — frontend opens overlay with Clerk email
-        },
-        HttpStatus.PAYMENT_REQUIRED
-      )
+    // Bind on demand (BILLING.md §3/§4.3). If we have no freemiusUserId yet, derive
+    // it server-side and persist it. A miss means Freemius has no account for this
+    // email yet → genuine new purchase, so emit the new-purchase 402.
+    let freemiusUserId = user.freemiusUserId
+    if (!freemiusUserId) {
+      freemiusUserId = await this.bindFreemiusUser(userId)
+      if (!freemiusUserId) {
+        throw new ProvisionGateBlockedException(
+          {
+            error: 'quota_exceeded',
+            message: 'Subscribe to create a session.',
+            quota: 0,
+            used: activeCount,
+            checkout: {} // new-purchase path — frontend opens overlay with Clerk email
+          },
+          HttpStatus.PAYMENT_REQUIRED
+        )
+      }
     }
 
     // Ask Freemius how many concurrent sessions this user may run.
     let quota: number
     try {
-      quota = await this.freemiusService.getEntitlement(user.freemiusUserId)
+      quota = await this.freemiusService.getEntitlement(freemiusUserId)
     } catch (error) {
       if (error instanceof FreemiusApiError) {
         // Freemius API down — can't verify entitlement; don't provision blind.
@@ -159,6 +167,50 @@ export class ProvisionService {
       },
       HttpStatus.PAYMENT_REQUIRED
     )
+  }
+
+  /**
+   * Bind freemiusUserId on a user's first create (BILLING.md §3/§4.3).
+   *
+   * Server-derived, zero client trust: the email comes from Clerk (live, not our
+   * possibly-stale DB and not the request), then Freemius is looked up by that
+   * email. A hit is persisted onto the users row and returned; a null means
+   * Freemius has no account yet, so the caller treats it as a new purchase. This
+   * runs inside the gate, so it self-heals — a failed bind is retried on the next
+   * create rather than leaving the user stuck unbound.
+   *
+   * @param userId - The authenticated Clerk user id (our internal user id).
+   * @returns The bound freemiusUserId, or null if no Freemius account exists yet.
+   */
+  private async bindFreemiusUser(userId: string): Promise<string | null> {
+    const email = await this.clerkService.getPrimaryEmail(userId)
+    if (!email) {
+      log.warn(
+        { userId },
+        'Provision bind skipped — no primary email from Clerk'
+      )
+      return null
+    }
+
+    const freemiusUserId =
+      await this.freemiusService.findFreemiusUserIdByEmail(email)
+    if (!freemiusUserId) {
+      log.info(
+        { userId, email },
+        'Provision bind — no Freemius account for email yet (new purchase)'
+      )
+      return null
+    }
+
+    await this.db.user.update({
+      where: { id: userId },
+      data: { freemiusUserId }
+    })
+    log.info(
+      { userId, freemiusUserId, email },
+      'Freemius user bound at provision gate'
+    )
+    return freemiusUserId
   }
 
   /**

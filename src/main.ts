@@ -1,11 +1,11 @@
-import './logger'
 import './env'
+import { nestLogger } from './logger'
 import { NestFactory } from '@nestjs/core'
 import { AppModule } from './app.module'
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
-    logger: false
+    logger: nestLogger
   })
 
   // Enable CORS so the Next.js frontend on port 3000 can talk to this Control App
