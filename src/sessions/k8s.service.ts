@@ -96,6 +96,19 @@ export class K8sService {
                   {
                     name: 'SESSION_STORAGE_PATH',
                     value: SESSION_STORAGE_PATH
+                  },
+                  // Logging → Better Stack. Forwarded from control's own env so
+                  // every worker ships to the same source (queryable by service +
+                  // sessionId). The Better Stack pair is required in control's
+                  // schema, so these are always real values; LOG_LEVEL defaults.
+                  { name: 'LOG_LEVEL', value: env.LOG_LEVEL ?? 'info' },
+                  {
+                    name: 'BETTERSTACK_SOURCE_TOKEN',
+                    value: env.BETTERSTACK_SOURCE_TOKEN
+                  },
+                  {
+                    name: 'BETTERSTACK_INGESTING_HOST',
+                    value: env.BETTERSTACK_INGESTING_HOST
                   }
                 ],
                 // Burstable: reserve 160Mi (density ~22/4GiB node), allow bursts to 224Mi before
