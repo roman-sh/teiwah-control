@@ -85,22 +85,20 @@ export class K8sService {
                 // digest cached on the node and rollout restart won't pick up new builds.
                 imagePullPolicy: 'Always',
                 ports: [{ containerPort: workerPort }],
+                // Worker pod env — full runbook: .env.example (WORKER POD ENV).
                 env: [
                   { name: 'SESSION_ID', value: sessionId },
+                  { name: 'NODE_ENV', value: 'production' },
+                  { name: 'SESSION_STORAGE_PATH', value: SESSION_STORAGE_PATH },
                   {
                     name: 'CONTROL_APP_BASE_URL',
                     value: env.CONTROL_APP_BASE_URL
                   },
-                  { name: 'NODE_ENV', value: 'production' },
-                  { name: 'PORT', value: env.SESSION_WORKER_PORT },
                   {
-                    name: 'SESSION_STORAGE_PATH',
-                    value: SESSION_STORAGE_PATH
+                    name: 'PUBLIC_API_BASE_URL',
+                    value: env.PUBLIC_API_BASE_URL
                   },
-                  // Logging → Better Stack. Forwarded from control's own env so
-                  // every worker ships to the same source (queryable by service +
-                  // sessionId). The Better Stack pair is required in control's
-                  // schema, so these are always real values; LOG_LEVEL defaults.
+                  { name: 'PORT', value: env.SESSION_WORKER_PORT },
                   { name: 'LOG_LEVEL', value: env.LOG_LEVEL ?? 'info' },
                   {
                     name: 'BETTERSTACK_SOURCE_TOKEN',
@@ -271,7 +269,10 @@ export class K8sService {
         namespace
       })
     } catch (e: unknown) {
-      this.rethrowUnlessNotFound(e, `Failed to delete Ingress ${sessionId} (might not exist)`)
+      this.rethrowUnlessNotFound(
+        e,
+        `Failed to delete Ingress ${sessionId} (might not exist)`
+      )
     }
 
     try {
@@ -301,7 +302,10 @@ export class K8sService {
         namespace
       })
     } catch (e: unknown) {
-      this.rethrowUnlessNotFound(e, `Failed to delete Service ${sessionId} (might not exist)`)
+      this.rethrowUnlessNotFound(
+        e,
+        `Failed to delete Service ${sessionId} (might not exist)`
+      )
     }
 
     try {
