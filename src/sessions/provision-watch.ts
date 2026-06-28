@@ -84,7 +84,10 @@ export async function watchSessionProvisioning(
   const deploymentDone = runBoundedWatch<k8s.V1Deployment>(
     kubeConfig,
     `/apis/apps/v1/namespaces/${env.K8S_NAMESPACE}/deployments`,
-    { fieldSelector: `metadata.name=${sessionId}`, timeoutSeconds: WATCH_CHUNK_SECONDS },
+    {
+      fieldSelector: `metadata.name=${sessionId}`,
+      timeoutSeconds: WATCH_CHUNK_SECONDS
+    },
     deadline,
     watchCtx,
     (phase, deployment) => {
@@ -201,7 +204,9 @@ function podStateFrom(pod: k8s.V1Pod): ProvisionState | null {
     return 'pod_running'
   }
 
-  const scheduled = pod.status?.conditions?.find((c) => c.type === 'PodScheduled')
+  const scheduled = pod.status?.conditions?.find(
+    (c) => c.type === 'PodScheduled'
+  )
   if (scheduled?.status === 'True' && phase === 'Pending') {
     const waiting = pod.status?.containerStatuses?.[0]?.state?.waiting?.reason
     if (waiting === 'ContainerCreating' || waiting === 'PodInitializing') {
@@ -224,7 +229,9 @@ function isPodReady(pod: k8s.V1Pod): boolean {
 }
 
 /** Extra context when a pod is stuck (ImagePullBackOff, CrashLoopBackOff, etc.). */
-function podConditionSummary(pod: k8s.V1Pod): Record<string, string | undefined> {
+function podConditionSummary(
+  pod: k8s.V1Pod
+): Record<string, string | undefined> {
   const waiting = pod.status?.containerStatuses?.[0]?.state?.waiting
   const terminated = pod.status?.containerStatuses?.[0]?.state?.terminated
   return {

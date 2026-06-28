@@ -82,30 +82,69 @@ export class FreemiusService {
     isTrial: boolean
     trialEndsAt: Date | null
   }> {
+    const license = await this.getActiveLicense(freemiusUserId)
+
+    // No active license → no entitlement, not a trial (quota 0). Returned as a
+    // concrete summary (not null) so the display can tell "expired" apart from a
+    // Freemius outage — getActiveLicense throws on the latter.
+    if (!license) {
+      return { quota: 0, isTrial: false, trialEndsAt: null }
+    }
+
+    // Trial is inferred as a valid (active) license with no subscription, with
+    // the license expiration as its end date.
+    const isTrial = license.isActive && !license.isSubscription()
+    return {
+      quota: this.effectiveQuotaFromPurchase(license),
+      isTrial,
+      trialEndsAt: isTrial ? license.expiration : null
+    }
+  }
+
+  /**
+   * The user's single active license, or null when none is active. One license
+   * per user, so null ⟺ that license is expired (the renewal case) — there is
+   * never a separate "active vs expired" lookup to do: an empty active result
+   * already means expired.
+   *
+   * retrievePurchases returns only active licenses and collapses API errors into
+   * [], so an empty result is ambiguous. assertNoActiveLicense disambiguates a
+   * genuine "none" (returns → we yield null) from a Freemius outage (throws
+   * FreemiusApiError, so callers can 503/retry rather than mistake an outage for
+   * an expired license).
+   *
+   * @param freemiusUserId - Freemius user id from webhooks or our users row.
+   * @returns The active license, or null when none is active.
+   * @throws {FreemiusApiError} When Freemius returns a retryable HTTP error.
+   */
+  private async getActiveLicense(
+    freemiusUserId: string
+  ): Promise<PurchaseInfo | null> {
     const purchases =
       await this.freemius.purchase.retrievePurchases(freemiusUserId)
-
-    switch (purchases.length) {
-      case 0: {
-        // Empty — confirm it's a real "no license", not a swallowed Freemius
-        // outage (throws if it can't confirm). No license → quota 0, no trial.
-        await this.assertNoActiveLicense(freemiusUserId)
-        return { quota: 0, isTrial: false, trialEndsAt: null }
-      }
-      default: {
-        // One active license expected — take the first. Quota comes from the
-        // license; trial is inferred as a valid (active) license with no
-        // subscription, with the license expiration as its end date.
-        const purchase = purchases[0]
-        const quota = this.effectiveQuotaFromPurchase(purchase)
-        const isTrial = purchase.isActive && !purchase.isSubscription()
-        return {
-          quota,
-          isTrial,
-          trialEndsAt: isTrial ? purchase.expiration : null
-        }
-      }
+    if (!purchases.length) {
+      await this.assertNoActiveLicense(freemiusUserId)
+      return null
     }
+    return purchases[0]
+  }
+
+  /**
+   * Active entitlement for the provision gate: the quota of the user's active
+   * license, or null when none is active (⟺ expired, since there is one license
+   * per user). Lets the gate branch on license state — "active vs expired" —
+   * instead of treating quota 0 as a sentinel for "no license".
+   *
+   * @param freemiusUserId - Freemius user id from webhooks or our users row.
+   * @returns `{ quota }` for the active license, or null when none is active.
+   * @throws {FreemiusApiError} When Freemius returns a retryable HTTP error.
+   * @throws {FreemiusLicenseQuotaMissingError} When quota is null on a valid license.
+   */
+  async getActiveEntitlement(
+    freemiusUserId: string
+  ): Promise<{ quota: number } | null> {
+    const license = await this.getActiveLicense(freemiusUserId)
+    return license ? { quota: this.effectiveQuotaFromPurchase(license) } : null
   }
 
   /**
@@ -119,7 +158,7 @@ export class FreemiusService {
    * @throws {FreemiusLicenseQuotaMissingError} When quota is null on a valid license.
    */
   async getEntitlement(freemiusUserId: string): Promise<number> {
-    return (await this.getBillingSummary(freemiusUserId)).quota
+    return (await this.getActiveEntitlement(freemiusUserId))?.quota ?? 0
   }
 
   /**
@@ -141,13 +180,12 @@ export class FreemiusService {
   }
 
   /**
-   * Authorized overlay settings for an existing license (upgrade or convert).
-   *
-   * Resolves license_id server-side from the Clerk user row — the client must
-   * not send it (BILLING.md §7). Omit `quota` to convert at the current quota;
+   * Authorized overlay settings to upgrade or convert an existing ACTIVE license
+   * (BILLING.md §7). Resolves license_id server-side from the Clerk user row —
+   * the client must not send it. Omit `quota` to convert at the current quota;
    * pass a number to authorize an add-quota upgrade.
    */
-  async createLicenseScopedCheckout(
+  async createUpgradeCheckout(
     clerkUserId: string,
     options?: { quota: number }
   ) {
@@ -168,7 +206,7 @@ export class FreemiusService {
     const purchases = await this.freemius.purchase.retrievePurchases(
       user.freemiusUserId
     )
-    if (purchases.length === 0) {
+    if (!purchases.length) {
       throw new HttpException(
         {
           error: 'no_license',
@@ -178,15 +216,102 @@ export class FreemiusService {
       )
     }
 
-    const licenseId = purchases[0].licenseId
+    return this.buildLicenseScopedCheckout(
+      purchases[0].licenseId,
+      options?.quota
+    )
+  }
+
+  /**
+   * License-scoped renewal checkout for a returning user's lapsed license —
+   * renews that same license: no quota change, no trial. Queries only EXPIRED
+   * licenses (retrievePurchases returns active ones, never the lapsed one we
+   * need). One license per user is the invariant (BILLING.md §1); a stray extra
+   * is logged and the first is renewed.
+   *
+   * Access revocation is deliberately not modelled: blocking a user is an
+   * auth-layer (Clerk) decision, not something we infer from Freemius license
+   * state.
+   */
+  async createRenewalCheckout(freemiusUserId: string) {
+    const licenses = await this.freemius.api.user.retrieveLicenses(
+      freemiusUserId,
+      { type: 'expired' }
+    )
+    if (licenses.length > 1) {
+      log.warn(
+        { freemiusUserId, licenseCount: licenses.length },
+        'User has more than one expired license — expected one per user; renewing the first'
+      )
+    }
+
+    return this.buildLicenseScopedCheckout(idToString(licenses[0].id!))
+  }
+
+  /**
+   * Shared tail of the upgrade and renewal paths: build the overlay settings for
+   * a checkout scoped to a specific license. `quota` rides along only when given
+   * (an add-quota upgrade); omitted, the checkout renews/converts at the current
+   * quota.
+   */
+  private async buildLicenseScopedCheckout(licenseId: string, quota?: number) {
     const checkout = await this.freemius.checkout.create({
       licenseId,
       planId: env.FS_PLAN_ID,
       isSandbox: this.isSandbox,
-      ...(options !== undefined ? { quota: options.quota } : {})
+      ...(quota !== undefined ? { quota } : {})
     })
 
     return { settings: checkout.getOptions() }
+  }
+
+  /**
+   * Magic-login link to the Freemius-hosted customer portal for this user.
+   *
+   * The portal is where customers self-serve subscription changes (downgrade
+   * slots, cancel, update payment) — things we deliberately don't rebuild in the
+   * dashboard. We surface it on the delete-session confirmation so a user who's
+   * removing a number can also drop the slot they're billed for.
+   *
+   * The link auto-logs the user in and is valid ~5 minutes, so it must be minted
+   * on demand (per click), never cached. Resolves freemiusUserId server-side
+   * from the Clerk user row — the client never passes it.
+   */
+  async createCustomerPortalLink(
+    clerkUserId: string
+  ): Promise<{ url: string }> {
+    const user = await this.db.user.findUnique({ where: { id: clerkUserId } })
+    if (!user) {
+      throw new HttpException('User not found', HttpStatus.NOT_FOUND)
+    }
+    if (!user.freemiusUserId) {
+      throw new HttpException(
+        {
+          error: 'no_license',
+          message: 'No billing account linked yet. Start a trial first.'
+        },
+        HttpStatus.NOT_FOUND
+      )
+    }
+
+    const portal = await this.freemius.api.user.retrieveHostedCustomerPortal(
+      user.freemiusUserId
+    )
+
+    // SDK returns null (or a link-less body) on a non-2xx from Freemius —
+    // treat as a transient billing outage the client can retry.
+    if (!portal?.link) {
+      throw new HttpException(
+        {
+          error: 'billing_unavailable',
+          message:
+            'Unable to open the billing portal right now. Please try again shortly.'
+        },
+        HttpStatus.SERVICE_UNAVAILABLE
+      )
+    }
+
+    return { url: portal.link }
   }
 
   /**

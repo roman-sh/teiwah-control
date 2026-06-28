@@ -26,8 +26,7 @@ import { Injectable } from '@nestjs/common'
  */
 
 /** Zuplo Developer API URLs (Account → Key Bucket → Consumer). */
-const CONSUMERS_URL =
-  `${env.ZUPLO_API_BASE}/accounts/${env.ZUPLO_ACCOUNT}/key-buckets/${env.ZUPLO_KEY_BUCKET}/consumers`
+const CONSUMERS_URL = `${env.ZUPLO_API_BASE}/accounts/${env.ZUPLO_ACCOUNT}/key-buckets/${env.ZUPLO_KEY_BUCKET}/consumers`
 
 /** POST — create consumer + mint one key (key-format=visible returns full secret once). */
 const CONSUMER_CREATE_URL = `${CONSUMERS_URL}?with-api-key=true&key-format=visible`
@@ -110,9 +109,7 @@ export class ZuploService {
 
     if (!response.ok) {
       const body = await response.text()
-      throw new Error(
-        `Zuplo list keys failed (${response.status}): ${body}`
-      )
+      throw new Error(`Zuplo list keys failed (${response.status}): ${body}`)
     }
 
     const { data } = (await response.json()) as ZuploKeysResponse

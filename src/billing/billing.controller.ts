@@ -39,7 +39,7 @@ export class BillingController {
     @Body() body: { quota?: number }
   ) {
     try {
-      const checkout = await this.freemiusService.createLicenseScopedCheckout(
+      const checkout = await this.freemiusService.createUpgradeCheckout(
         userId,
         body.quota !== undefined ? { quota: body.quota } : undefined
       )
@@ -75,5 +75,27 @@ export class BillingController {
   async sandbox() {
     const sandbox = await this.freemiusService.getNewPurchaseSandboxParams()
     return { sandbox }
+  }
+
+  /**
+   * GET /billing/portal
+   *
+   * Mint a fresh magic-login link to the Freemius customer portal for the
+   * current user (self-serve subscription management — downgrade slots, cancel,
+   * update payment). Returned to the dashboard, which opens it in a new tab.
+   * The link is short-lived, so it's generated per request, never cached.
+   */
+  @Get('portal')
+  async portal(@Headers('x-user-id') userId: string) {
+    try {
+      return await this.freemiusService.createCustomerPortalLink(userId)
+    } catch (error) {
+      if (error instanceof HttpException) throw error
+      log.error(error, 'Failed to create customer portal link')
+      throw new HttpException(
+        'Failed to open billing portal',
+        HttpStatus.INTERNAL_SERVER_ERROR
+      )
+    }
   }
 }

@@ -65,7 +65,8 @@ export class ReconciliationProcessor extends WorkerHost {
     // Live read from Freemius — never trust quota from the webhook payload.
     // Throws on API failure so BullMQ retries instead of deleting sessions
     // based on a bad read.
-    const effectiveQuota = await this.freemiusService.getEntitlement(freemiusUserId)
+    const effectiveQuota =
+      await this.freemiusService.getEntitlement(freemiusUserId)
 
     // All sessions count toward quota in v1 (no suspended state yet).
     // Newest first — when quota shrinks we delete the most recently created
@@ -109,7 +110,8 @@ export class ReconciliationProcessor extends WorkerHost {
         activeSessions: sessions.length,
         excess,
         idsToDelete,
-        reason: 'active sessions exceed Freemius entitlement quota; deleting newest first'
+        reason:
+          'active sessions exceed Freemius entitlement quota; deleting newest first'
       },
       'Reconciliation deleting excess sessions'
     )
@@ -118,12 +120,14 @@ export class ReconciliationProcessor extends WorkerHost {
     // if any fail, throw once at the end so BullMQ retries.
     let error = false
     for (const id of idsToDelete) {
-      try { await this.sessionsService.deleteSession(id) }
-      catch { error = true }
+      try {
+        await this.sessionsService.deleteSession(id)
+      } catch {
+        error = true
+      }
     }
-    if (error) throw new Error(
-      'Reconciliation: one or more session deletes failed'
-    )
+    if (error)
+      throw new Error('Reconciliation: one or more session deletes failed')
 
     log.info(
       {

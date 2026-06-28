@@ -24,8 +24,7 @@ function headerValue(value: string | string[] | undefined): string | undefined {
         // Reuse an upstream request id (Zuplo will send x-request-id) or mint one,
         // and echo it back so the whole chain shares the same correlation id.
         genReqId: (req: IncomingMessage, res: ServerResponse) => {
-          const id =
-            headerValue(req.headers['x-request-id']) ?? randomUUID()
+          const id = headerValue(req.headers['x-request-id']) ?? randomUUID()
           res.setHeader('x-request-id', id)
           return id
         },

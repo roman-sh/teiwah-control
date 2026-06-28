@@ -5,7 +5,10 @@ import {
   HttpException,
   HttpStatus
 } from '@nestjs/common'
-import { FreemiusService, type FreemiusWebhookPayload } from './freemius.service'
+import {
+  FreemiusService,
+  type FreemiusWebhookPayload
+} from './freemius.service'
 
 /**
  * HTTP surface for inbound Freemius webhooks.
@@ -35,7 +38,10 @@ export class FreemiusController {
     )
     try {
       await this.freemiusService.handleLicenseWebhook(body)
-      log.info({ eventId: body.id, type: body.type }, 'Freemius webhook handled')
+      log.info(
+        { eventId: body.id, type: body.type },
+        'Freemius webhook handled'
+      )
       // Freemius only needs a 2xx to consider the event delivered. The exact
       // body is irrelevant to them; `{ received: true }` is purely for humans
       // inspecting the response (e.g. via webhook.site).

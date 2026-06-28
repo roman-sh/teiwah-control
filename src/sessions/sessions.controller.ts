@@ -18,6 +18,7 @@ import { ProvisionGateBlockedException } from '../provision/provision-gate.excep
 import { FreemiusService } from '../billing/freemius.service'
 import { DbService } from '../db/db.service'
 import { UserIdHeaderGuard } from './user-id-header.guard'
+import { SessionOwnerGuard } from './session-owner.guard'
 
 /**
  * Live per-user billing block for the dashboard (BILLING.md §7). `null` only on
@@ -64,9 +65,7 @@ export class SessionsController {
       // No users row (?.) or row not yet linked to Freemius (?? null) both mean
       // "no billing account" — collapse to null so buildBillingBlock returns the
       // quota-0 block instead of hitting Freemius.
-      const billing = await this.buildBillingBlock(
-        user?.freemiusUserId ?? null
-      )
+      const billing = await this.buildBillingBlock(user?.freemiusUserId ?? null)
 
       return {
         sessions: sessions.map((session) => ({
@@ -147,9 +146,11 @@ export class SessionsController {
    * GET /sessions/:id/api-key
    *
    * Reveal the full Zuplo API key for a session (dashboard "Show").
-   * Fetched from Zuplo on demand — not stored in DB.
+   * Fetched from Zuplo on demand — not stored in DB. SessionOwnerGuard ensures
+   * the caller owns the session before its key can be revealed.
    */
   @Get(':id/api-key')
+  @UseGuards(SessionOwnerGuard)
   async getSessionApiKey(@Param('id') id: string) {
     try {
       const apiKey = await this.zuploService.getSessionConsumerApiKey(id)
@@ -169,23 +170,17 @@ export class SessionsController {
    * PATCH /sessions/:id/webhook
    *
    * Save the inbound webhook URL for a session (WhatsApp → Teiwah → user URL).
+   * SessionOwnerGuard has already confirmed the session exists and belongs to
+   * the caller, so the handler can update directly.
    */
   @Patch(':id/webhook')
+  @UseGuards(SessionOwnerGuard)
   async updateWebhook(
     @Param('id') id: string,
     @Headers('x-user-id') userId: string,
     @Body('webhookUrl') webhookUrl: string
   ) {
     try {
-      // Ensure the session belongs to the user
-      const session = await this.dbService.activeSession.findUnique({
-        where: { id }
-      })
-
-      if (!session) {
-        throw new HttpException('Session not found', HttpStatus.NOT_FOUND)
-      }
-
       await this.dbService.session.update({
         where: { id },
         data: { webhookUrl }
@@ -207,19 +202,22 @@ export class SessionsController {
    * DELETE /sessions/:id
    *
    * Tear down a session: Zuplo consumer, then k8s worker, then isDeleted in DB.
+   * SessionOwnerGuard has already confirmed the session exists and belongs to
+   * the caller (404 otherwise).
    */
   @Delete(':id')
+  @UseGuards(SessionOwnerGuard)
   async deleteSession(@Param('id') id: string) {
     try {
       await this.sessionsService.deleteSession(id)
       return { success: true, message: 'Session deleted successfully' }
     } catch (error) {
-      log.error(error, `Failed to delete session ${id}`)
-
-      // If the error is an intentional HTTP error we threw earlier (like a 404),
-      // we re-throw it so the frontend gets the correct status code.
-      // If it's a random crash or DB error, we fall through and throw a generic 500.
+      // Intentional HTTP errors (e.g. a 404 from the guard, or one raised
+      // downstream) are expected client responses — re-throw without logging.
       if (error instanceof HttpException) throw error
+
+      // A real crash or DB/k8s/Zuplo failure — log and return a generic 500.
+      log.error(error, `Failed to delete session ${id}`)
       throw new HttpException(
         'Failed to delete session',
         HttpStatus.INTERNAL_SERVER_ERROR

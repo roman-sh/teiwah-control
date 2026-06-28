@@ -35,7 +35,10 @@ export class UsersService {
       update: { email }
     })
 
-    log.info({ clerkUserId: id, email, event: payload.type }, 'User synced from Clerk webhook')
+    log.info(
+      { clerkUserId: id, email, event: payload.type },
+      'User synced from Clerk webhook'
+    )
   }
 }
 

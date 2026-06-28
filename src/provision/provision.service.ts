@@ -98,7 +98,7 @@ export class ProvisionService {
     //                            itself (Clerk email + readonly_user). No backend
     //                            pre-step; nothing to generate here.
     //   checkout: { settings } → upgrade — backend-generated license-scoped checkout
-    //                            (createLicenseScopedCheckout / POST /billing/checkout).
+    //                            (createUpgradeCheckout / POST /billing/checkout).
     //
     // On overlay success the frontend retries POST /sessions; the gate re-fetches
     // entitlement live so the retry sees the fresh quota.
@@ -127,10 +127,14 @@ export class ProvisionService {
       }
     }
 
-    // Ask Freemius how many concurrent sessions this user may run.
-    let quota: number
+    // Read the user's active license. One license per user, so this settles the
+    // whole branch in a single lookup: a present license is active and carries
+    // the quota we enforce; a null means that single license is expired (the
+    // renewal case) — there's no separate "is it active or expired?" call.
+    let entitlement: { quota: number } | null
     try {
-      quota = await this.freemiusService.getEntitlement(freemiusUserId)
+      entitlement =
+        await this.freemiusService.getActiveEntitlement(freemiusUserId)
     } catch (error) {
       if (error instanceof FreemiusApiError) {
         // Freemius API down — can't verify entitlement; don't provision blind.
@@ -150,32 +154,38 @@ export class ProvisionService {
       throw error
     }
 
-    // Room under paid quota — gate passes, caller may provision.
-    if (activeCount < quota) {
-      log.debug(
-        { userId, quota, used: activeCount },
-        'Provision gate passed'
+    // No active license, but the user IS bound to a Freemius account (we're past
+    // the bind step) — a returning user whose license lapsed or whose no-payment
+    // trial ended. They must subscribe, and must NOT be offered a second free
+    // trial: we renew their existing (expired) license, preserving the
+    // one-user↔one-license invariant (BILLING.md §1). The frontend gets
+    // `settings`, the same branch the upgrade path uses.
+    if (!entitlement) {
+      const checkout =
+        await this.freemiusService.createRenewalCheckout(freemiusUserId)
+      log.info(
+        { userId },
+        'Provision gate blocked: subscription required (no active entitlement)'
       )
-      return
-    }
-
-    // No active entitlement (never subscribed, or license expired/cancelled).
-    // Use the new-purchase overlay (checkout: {}), not license-scoped checkout —
-    // retrievePurchases only returns active licenses, so createLicenseScopedCheckout
-    // would 404 here. The frontend opens the overlay with trial: true; Freemius
-    // decides trial vs paid from the user's email (second trial → subscription).
-    if (quota === 0) {
-      log.info({ userId }, 'Provision gate blocked: no active entitlement')
       throw new ProvisionGateBlockedException(
         {
           error: 'quota_exceeded',
           message: 'Subscribe to create a session.',
           quota: 0,
           used: activeCount,
-          checkout: {}
+          checkout
         },
         HttpStatus.PAYMENT_REQUIRED
       )
+    }
+
+    // Active license — enforce its quota.
+    const quota = entitlement.quota
+
+    // Room under paid quota — gate passes, caller may provision.
+    if (activeCount < quota) {
+      log.debug({ userId, quota, used: activeCount }, 'Provision gate passed')
+      return
     }
 
     // At or over paid quota — license-scoped checkout to add one more seat.
@@ -246,7 +256,7 @@ export class ProvisionService {
    * paid seat (current Freemius quota + 1). Only called when quota > 0.
    */
   private async buildUpgradeCheckout(userId: string, quota: number) {
-    return this.freemiusService.createLicenseScopedCheckout(userId, {
+    return this.freemiusService.createUpgradeCheckout(userId, {
       quota: quota + 1
     })
   }
