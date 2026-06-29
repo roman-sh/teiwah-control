@@ -162,6 +162,32 @@ export class FreemiusService {
   }
 
   /**
+   * Whether this Freemius user is a paying customer: an active license backed by
+   * a subscription. A no-payment trial has an active license but NO subscription
+   * (BILLING.md §7/§10), so the subscription link is the clean trial-vs-paid
+   * signal — confirmed empirically (a trial license returns subscriptionId null,
+   * a paid one returns a subscription id).
+   *
+   * `isSubscription()` is `subscriptionId !== null`, NOT "subscription currently
+   * active". That is deliberate: when a paying user cancels, the subscription
+   * entity persists and the license stays active until expiry, so this keeps
+   * returning true — the "paid but cancelled, license still legit" case we must
+   * not treat as a trial. (An `?filter=active` subscription query would wrongly
+   * drop that user.) `trial_plan_id` is not used: the licenses endpoint omits it.
+   *
+   * Used by the phone-authorize gate to never block a paying customer (e.g. one
+   * who re-registered under a new email and reconnects the same number).
+   *
+   * @param freemiusUserId - Freemius user id from our users row.
+   * @returns True when the user holds an active, subscription-backed license.
+   * @throws {FreemiusApiError} When Freemius returns a retryable HTTP error.
+   */
+  async hasPaidLicense(freemiusUserId: string): Promise<boolean> {
+    const license = await this.getActiveLicense(freemiusUserId)
+    return Boolean(license?.isSubscription())
+  }
+
+  /**
    * Resolve the Freemius user id for an email, or null if none exists yet.
    *
    * The provision gate calls this to bind freemiusUserId on a user's first
