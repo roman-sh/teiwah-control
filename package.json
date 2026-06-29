@@ -19,6 +19,8 @@
     "start:prod": "node dist/main.js",
     "//tunnel": "cloudflared only, foreground — Ctrl+C stops it",
     "tunnel": "bash -c 'set -a && source .env && set +a && exec cloudflared tunnel run --token \"$CLOUDFLARED_TUNNEL_TOKEN\"'",
+    "//db:studio": "Prisma Studio — browse users/sessions; uses DATABASE_URL from .env",
+    "db:studio": "bash -c 'set -a && source .env && set +a && exec npx prisma studio'",
     "lint": "eslint \"{src,apps,libs}/**/*.ts\" --fix"
   },
   "dependencies": {
