@@ -9,6 +9,7 @@ import {
   UseGuards
 } from '@nestjs/common'
 import { FreemiusApiError, FreemiusService } from './freemius.service'
+import { summarizeCheckoutSettingsForLog } from './checkout-log'
 import { UserIdHeaderGuard } from '../sessions/user-id-header.guard'
 
 /**
@@ -42,6 +43,14 @@ export class BillingController {
       const checkout = await this.freemiusService.createUpgradeCheckout(
         userId,
         body.quota !== undefined ? { quota: body.quota } : undefined
+      )
+      log.info(
+        {
+          userId,
+          targetQuota: body.quota,
+          checkout: summarizeCheckoutSettingsForLog(checkout)
+        },
+        'License-scoped checkout authorized'
       )
       return { checkout }
     } catch (error) {

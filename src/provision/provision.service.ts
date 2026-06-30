@@ -1,4 +1,5 @@
 import { HttpStatus, Injectable } from '@nestjs/common'
+import { summarizeCheckoutSettingsForLog } from '../billing/checkout-log'
 import { DbService } from '../db/db.service'
 import { FreemiusApiError, FreemiusService } from '../billing/freemius.service'
 import { ClerkService } from '../users/clerk.service'
@@ -164,7 +165,7 @@ export class ProvisionService {
       const checkout =
         await this.freemiusService.createRenewalCheckout(freemiusUserId)
       log.info(
-        { userId },
+        { userId, used: activeCount, checkout: summarizeCheckoutSettingsForLog(checkout) },
         'Provision gate blocked: subscription required (no active entitlement)'
       )
       throw new ProvisionGateBlockedException(
@@ -192,7 +193,13 @@ export class ProvisionService {
     const checkout = await this.buildUpgradeCheckout(userId, quota)
 
     log.info(
-      { userId, quota, used: activeCount },
+      {
+        userId,
+        quota,
+        used: activeCount,
+        targetQuota: quota + 1,
+        checkout: summarizeCheckoutSettingsForLog(checkout)
+      },
       'Provision gate blocked: upgrade required'
     )
     throw new ProvisionGateBlockedException(

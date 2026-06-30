@@ -53,7 +53,9 @@ export class SessionsService {
 
     log.info({ sessionId, userId }, 'Session created')
 
-    this.k8sService.startProvisioningWatch(sessionId)
+    // Provision watch logs k8s transitions for observability only — not wired to
+    // board UI yet. Re-enable via K8sService.startProvisioningWatch when needed.
+    // this.k8sService.startProvisioningWatch(sessionId)
 
     return {
       sessionId,
