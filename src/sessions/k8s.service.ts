@@ -255,6 +255,31 @@ export class K8sService {
   }
 
   /**
+   * Explicitly unlink the WhatsApp device before permanent session teardown.
+   * A pod shutdown cannot represent this intent because k8s uses the same
+   * SIGTERM for rollouts and failures. Failure is best-effort: an unavailable
+   * worker must not make an otherwise valid session impossible to delete.
+   */
+  async disconnectSessionWorker(sessionId: string): Promise<void> {
+    const namespace = env.K8S_NAMESPACE
+
+    try {
+      log.debug({ sessionId }, 'Requesting worker disconnect before deletion')
+      await this.coreApi.connectPostNamespacedServiceProxyWithPath({
+        name: sessionId,
+        namespace,
+        path: 'disconnect'
+      })
+      log.info({ sessionId }, 'Worker disconnected before deletion')
+    } catch (error) {
+      log.warn(
+        { error, sessionId },
+        'Worker disconnect failed; continuing permanent session deletion'
+      )
+    }
+  }
+
+  /**
    * Tear down all k8s resources for a session worker (reverse of create).
    * Each delete tolerates 404; any other error fails the whole call so the
    * caller can retry before removing the DB row.

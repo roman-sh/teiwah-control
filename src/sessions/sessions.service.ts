@@ -67,13 +67,15 @@ export class SessionsService {
   }
 
   /**
-   * Tear down a session. Zuplo first so a k8s failure leaves the worker running
-   * for a clean retry; mark isDeleted last so the row stays until external
-   * teardown succeeds (and remains for provision-rate counting).
+   * Tear down a session. Revoke its API key first, then explicitly ask the
+   * worker to unlink WhatsApp before removing the pod. Routine pod shutdowns do
+   * not unlink because k8s also uses them for rollouts. Mark isDeleted last so
+   * the row stays until external teardown succeeds.
    */
   async deleteSession(sessionId: string): Promise<void> {
     log.debug({ sessionId }, 'Deleting session')
     await this.zuploService.deleteSessionConsumer(sessionId)
+    await this.k8sService.disconnectSessionWorker(sessionId)
     await this.k8sService.deleteSessionWorker(sessionId)
     await this.db.session.update({
       where: { id: sessionId },
